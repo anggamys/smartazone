@@ -1,40 +1,34 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include "display_manager.h"
 
-#define LED_PIN 37
-#define I2C_SDA 4
-#define I2C_SCL 5
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
+#define OLED_SDA 18
+#define OLED_SCL 17
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+DisplayManager oled(OLED_SDA, OLED_SCL);
 
 void setup() {
-  pinMode(LED_PIN, OUTPUT);
   Serial.begin(115200);
-  Serial.println("EoRa-S3 Test Start...");
 
-  Wire.begin(I2C_SDA, I2C_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED init failed!");
-    for(;;);
+  if (!oled.begin()) {
+    Serial.println("Display init failed!");
+    while (true);
   }
 
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(10, 20);
-  display.println("Hello EoRa!");
-  display.display();
+  oled.printText("Hello ESP32-S2!", 0, 10, 2);
+  delay(2000);
+
+  oled.printTwoLine("PlatformIO", "OLED Manager");
+  delay(2000);
+
+  for (int i = 0; i <= 100; i += 20) {
+    oled.clear();
+    oled.printText("Loading...", 0, 0, 1, false);
+    oled.drawProgressBar(10, 30, 100, 10, i);
+    delay(500);
+  }
 }
 
 void loop() {
-  digitalWrite(LED_PIN, HIGH);
-  delay(500);
-  digitalWrite(LED_PIN, LOW);
-  delay(500);
-  Serial.println("Blink!");
+  oled.printText("Loop Running", 0, 20, 1);
+  delay(2000);
 }
