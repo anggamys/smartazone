@@ -1,12 +1,11 @@
-#ifndef BLE_MANAGER_H
-#define BLE_MANAGER_H
-
+// BLEManager.h
+#pragma once
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
-#include <BLEClient.h>
+#include <map>
+#include <vector>
 
 class BLEManager {
 public:
@@ -21,23 +20,25 @@ private:
     bool reconnecting;
     unsigned long lastReconnectAttempt;
     unsigned long reconnectInterval;
-
+    bool hasShownServices;
     BLEClient* pClient;
-    BLEUUID serviceUUID;
-    BLEUUID charUUID;
+
+    // ======= Tambahkan ini =======
+    size_t currentServiceIndex;
+    size_t currentCharIndex;
+    // ============================
+
+    void scanAndConnect();
+    bool connectToServer(BLEAddress pAddress);
+    void showServiceValues();
+    void scheduleReconnect();
 
     class MyClientCallback : public BLEClientCallbacks {
-        BLEManager* parent;
     public:
-        MyClientCallback(BLEManager* p) : parent(p) {}
-        void onConnect(BLEClient* pClient) override;
-        void onDisconnect(BLEClient* pClient) override;
+        MyClientCallback(BLEManager* parent) : parent(parent) {}
+        void onConnect(BLEClient* pClient);
+        void onDisconnect(BLEClient* pClient);
+    private:
+        BLEManager* parent;
     };
-
-    bool connectToServer(BLEAddress pAddress);
-    void scanAndConnect();
-    void readCharacteristic();
-    void scheduleReconnect();
 };
-
-#endif

@@ -6,18 +6,20 @@ BLEManager::BLEManager(const char* targetAddress, int scanTime)
       deviceConnected(false),
       reconnecting(false),
       lastReconnectAttempt(0),
-      reconnectInterval(5000), // mulai 5 detik
+      reconnectInterval(5000),
+      hasShownServices(false),
       pClient(nullptr),
-      serviceUUID("00001805-0000-1000-8000-00805f9b34fb"), // contoh: Current Time Service
-      charUUID("00002a2b-0000-1000-8000-00805f9b34fb")     // Current Time characteristic
-{}
+      currentServiceIndex(0),
+      currentCharIndex(0)
+{
+}
 
 void BLEManager::MyClientCallback::onConnect(BLEClient* pClient) {
-    Serial.println("[BLE] ESP32 berhasil connect ke device BLE!");
+    Serial.println("[BLE] Terhubung ke device BLE!");
 }
 
 void BLEManager::MyClientCallback::onDisconnect(BLEClient* pClient) {
-    Serial.println("[BLE] Terputus dari device BLE, akan mencoba reconnect...");
+    Serial.println("[BLE] Terputus dari device BLE, mencoba reconnect...");
     parent->deviceConnected = false;
     parent->scheduleReconnect();
 }
@@ -30,10 +32,13 @@ bool BLEManager::connectToServer(BLEAddress pAddress) {
     pClient->setClientCallbacks(new MyClientCallback(this));
 
     if (pClient->connect(pAddress)) {
-        Serial.println("[BLE] Terhubung ke device BLE!");
+        Serial.println("[BLE] Terhubung!");
         deviceConnected = true;
         reconnecting = false;
-        reconnectInterval = 5000; // reset interval
+        reconnectInterval = 5000;
+        hasShownServices = false; // reset flag
+        currentServiceIndex = 0;
+        currentCharIndex = 0;
         return true;
     } else {
         Serial.println("[BLE] Gagal connect.");
@@ -64,28 +69,72 @@ void BLEManager::scanAndConnect() {
     }
 
     if (!found) {
-        Serial.println("[BLE] Device target tidak ditemukan, akan coba ulang...");
+        Serial.println("[BLE] Device target tidak ditemukan, scan ulang nanti...");
         scheduleReconnect();
     }
 }
 
-void BLEManager::readCharacteristic() {
-    if (!deviceConnected) return;
+void BLEManager::showServiceValues() {
+    if (!deviceConnected || !pClient) return;
 
-    try {
-        BLERemoteService* pRemoteService = pClient->getService(serviceUUID);
-        if (pRemoteService != nullptr) {
-            BLERemoteCharacteristic* pRemoteChar = pRemoteService->getCharacteristic(charUUID);
-            if (pRemoteChar != nullptr) {
-                std::string value = pRemoteChar->readValue();
-                Serial.print("[BLE] Nilai characteristic: ");
-                Serial.println(value.c_str());
+    static std::map<std::string, std::vector<BLERemoteCharacteristic*>> serviceMap;
+
+    if (!hasShownServices) {
+        Serial.println("[BLE] Menampilkan semua service & characteristic (bertahap)...");
+
+        auto services = pClient->getServices();
+        if (!services) return;
+
+        // Simpan semua characteristic dalam map
+        for (auto &serviceEntry : *services) {
+            BLERemoteService* service = serviceEntry.second;
+            if (!service) continue;
+
+            auto characteristics = service->getCharacteristics();
+            if (!characteristics) continue;
+
+            serviceMap[service->getUUID().toString()] = {};
+            for (auto &charEntry : *characteristics) {
+                BLERemoteCharacteristic* characteristic = charEntry.second;
+                if (characteristic) {
+                    serviceMap[service->getUUID().toString()].push_back(characteristic);
+                }
             }
         }
-    } catch (...) {
-        Serial.println("[BLE] Error baca characteristic");
-        deviceConnected = false;
-        scheduleReconnect();
+
+        hasShownServices = true;
+        currentServiceIndex = 0;
+        currentCharIndex = 0;
+    }
+
+    // Iterasi satu characteristic per loop
+    auto it = serviceMap.begin();
+    std::advance(it, currentServiceIndex);
+    if (it != serviceMap.end()) {
+        const std::string &serviceUUID = it->first;
+        auto &charList = it->second;
+
+        if (currentCharIndex < charList.size()) {
+            BLERemoteCharacteristic* characteristic = charList[currentCharIndex];
+            if (characteristic) {
+                std::string value;
+                try {
+                    value = characteristic->readValue();
+                } catch (...) {
+                    value = "<read error>";
+                }
+
+                Serial.printf("[BLE] Service UUID: %s, Characteristic UUID: %s, Value: %s\n",
+                              serviceUUID.c_str(),
+                              characteristic->getUUID().toString().c_str(),
+                              value.c_str());
+            }
+            currentCharIndex++;
+        } else {
+            // Lanjut ke service berikutnya
+            currentServiceIndex++;
+            currentCharIndex = 0;
+        }
     }
 }
 
@@ -93,7 +142,7 @@ void BLEManager::scheduleReconnect() {
     if (!reconnecting) {
         reconnecting = true;
         lastReconnectAttempt = millis();
-        reconnectInterval = min(reconnectInterval * 2, (unsigned long)60000); // max 60 detik
+        reconnectInterval = min(reconnectInterval * 2, 60000UL);
         Serial.printf("[BLE] Reconnect dijadwalkan dalam %lu ms\n", reconnectInterval);
     }
 }
@@ -106,11 +155,11 @@ void BLEManager::begin() {
 
 void BLEManager::loop() {
     if (deviceConnected) {
-        readCharacteristic();
+        showServiceValues(); // membaca satu characteristic per loop
+        delay(50); // beri ESP32 waktu untuk BLE stack
     } else if (reconnecting && millis() - lastReconnectAttempt >= reconnectInterval) {
         Serial.println("[BLE] Mencoba reconnect...");
         reconnecting = false;
         scanAndConnect();
     }
-    delay(3000);
 }
