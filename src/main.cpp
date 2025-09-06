@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include "ble_manager.h"
 
-// MAC address target
 const char* targetAddress = "f8:fd:e8:84:37:89";
 
-// Inisialisasi manager
+// UUID Heart Rate Service & Characteristic (standard BLE spec)
+static BLEUUID heartRateService("0000180d-0000-1000-8000-00805f9b34fb");
+static BLEUUID heartRateChar("00002a37-0000-1000-8000-00805f9b34fb");
+
 BLEManager ble(targetAddress);
 
 void setup() {
@@ -14,5 +16,18 @@ void setup() {
 
 void loop() {
     ble.loop();
-    delay(100); // beri waktu ke BLE stack
+
+    static bool serviceConnected = false;
+    static bool notifyEnabled = false;
+
+    if (ble.isConnected()) {
+        if (!serviceConnected) {
+            serviceConnected = ble.connectToService(heartRateService);
+        }
+        if (serviceConnected && !notifyEnabled) {
+            notifyEnabled = ble.enableNotify(heartRateService, heartRateChar);
+        }
+    }
+
+    delay(500);
 }
