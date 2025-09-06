@@ -27,6 +27,12 @@ void loop() {
         if (serviceConnected && !notifyEnabled) {
             notifyEnabled = ble.enableNotify(heartRateService, heartRateChar);
         }
+
+        // Ambil Heart Rate terakhir via return value
+        int hr = ble.getLastHeartRate();
+        if (hr != -1) {
+            Serial.println("[MAIN] Current Heart Rate: " + String(hr));
+        }
     }
 
     delay(500);

@@ -5,16 +5,7 @@ static void logBLE(const String& msg) {
     Serial.println("[BLE] " + msg);
 }
 
-// Global notify callback (contoh untuk Heart Rate)
-static void heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
-                                    uint8_t* pData, size_t length, bool isNotify) {
-    if (length > 1) {
-        uint8_t hrValue = pData[1]; // Byte ke-1 = Heart Rate
-        logBLE("Heart Rate: " + String(hrValue));
-    } else {
-        logBLE("Invalid Heart Rate packet.");
-    }
-}
+int BLEManager::lastHeartRate = -1; // default belum ada data
 
 BLEManager::BLEManager(const char* targetAddress)
     : targetAddress(targetAddress),
@@ -65,6 +56,7 @@ bool BLEManager::connectToService(const BLEUUID& serviceUUID) {
         return false;
     }
 
+    // BLEUUID::toString() is not a const method, so make a local copy to call it safely.
     BLEUUID uuid = serviceUUID;
     logBLE("Connected to service: " + String(uuid.toString().c_str()));
     return true;
@@ -128,5 +120,16 @@ void BLEManager::loop() {
         logBLE("Attempting reconnect...");
         lastReconnectAttempt = millis();
         scanDevices();
+    }
+}
+
+void BLEManager::heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
+                                         uint8_t* pData, size_t length, bool isNotify) {
+    if (length > 1) {
+        uint8_t hrValue = pData[1]; // Byte ke-1 = Heart Rate
+        lastHeartRate = hrValue;
+        logBLE("Heart Rate: " + String(hrValue));
+    } else {
+        logBLE("Invalid Heart Rate packet.");
     }
 }
