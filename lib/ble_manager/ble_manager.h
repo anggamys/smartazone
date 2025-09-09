@@ -3,19 +3,25 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
+#include <functional>
 
 class BLEManager {
 public:
     explicit BLEManager(const char* targetAddress);
     void begin();
-    void loop();
 
     bool connectToServer(BLEAddress address);
     bool connectToService(const BLEUUID& serviceUUID);
     bool enableNotify(const BLEUUID& serviceUUID, const BLEUUID& charUUID);
+    bool tryReconnect();
 
     bool isConnected() const { return deviceConnected; }
-    int getLastHeartRate() const { return lastHeartRate; }
+    int  getLastHeartRate() const { return lastHeartRate; }
+
+    void setHRAvailableFlag(bool* flag, int* buffer);
+
+    // event flag getter
+    bool popLog(String& out);
 
 private:
     const char* targetAddress;
@@ -25,8 +31,16 @@ private:
     static constexpr unsigned long reconnectInterval = 5000; // ms
     BLEClient* pClient;
 
-    static int lastHeartRate;  // Heart Rate terakhir dari callback
+    static int lastHeartRate;
+    static void heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
+                                        uint8_t* pData, size_t length, bool isNotify);
+
     void scanDevices();
+
+    // internal logging queue
+    static void pushLog(const char* msg);
+    static String logBuffer;
+    static bool   hasLog;
 
     class MyClientCallback : public BLEClientCallbacks {
     public:
@@ -36,8 +50,4 @@ private:
     private:
         BLEManager* parent;
     };
-
-    // Callback untuk notify
-    static void heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
-                                        uint8_t* pData, size_t length, bool isNotify);
 };
