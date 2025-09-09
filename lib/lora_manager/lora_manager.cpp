@@ -14,17 +14,16 @@ bool LoRaHandler::begin(float frequency) {
     digitalWrite(_rst, HIGH);
     delay(10);
 
-    // Init SPI (coba FSPI, kalau gagal bisa HSPI)
     spi->begin(_sck, _miso, _mosi, _nss);
-
     radio = new SX1262(new Module(_nss, _dio1, _rst, _busy, *spi));
 
-    int state = radio->begin(frequency, 125.0, 7, 5, 0x34, 14);
+    int state = radio->begin(frequency, 125.0, 7, 5, 0x34, 14, 8, 0.0f, false);
     if (state != RADIOLIB_ERR_NONE) {
         Serial.print("[LoRa] LoRa init gagal, code: ");
         Serial.println(state);
         return false;
     }
+
     Serial.println("[LoRa] Init sukses!");
     return true;
 }
