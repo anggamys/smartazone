@@ -1,8 +1,8 @@
 #include "ble_manager.h"
 
 // buffer untuk log aman (diakses dari loop)
-String BLEManager::logBuffer = "";
-bool   BLEManager::hasLog = false;
+char BLEManager::logBuffer[64] = {0};  // Fixed size buffer instead of String
+bool BLEManager::hasLog = false;
 
 // buffer HR callback
 static bool* hrFlagPtr = nullptr;
@@ -15,21 +15,25 @@ void BLEManager::setHRAvailableFlag(bool* flag, int* buffer) {
 
 int BLEManager::lastHeartRate = -1;
 
-BLEManager::BLEManager(const char* targetAddress)
+BLEManager::BLEManager(const char* targetAddress, uint32_t scanTime)
     : targetAddress(targetAddress),
+      scanTime(scanTime),
       deviceConnected(false),
       reconnecting(false),
       lastReconnectAttempt(0),
       pClient(nullptr) {}
 
 void BLEManager::pushLog(const char* msg) {
-    logBuffer = String(msg);
+    // Use a smaller buffer to save memory (64 chars instead of potentially larger String)
+    static char logBuffer[64] = {0};
+    strncpy(logBuffer, msg, 63);
+    logBuffer[63] = '\0';
     hasLog = true;
 }
 
 bool BLEManager::popLog(String& out) {
     if (hasLog) {
-        out = logBuffer;
+        out = String(logBuffer);
         hasLog = false;
         return true;
     }
@@ -127,16 +131,29 @@ void BLEManager::scanDevices() {
     BLEManager::pushLog("[BLE] Scanning for devices...");
     BLEScan* pBLEScan = BLEDevice::getScan();
     pBLEScan->setActiveScan(true);
-    BLEScanResults results = pBLEScan->start(5);
+    
+    // Optimize scan parameters for better performance and lower power
+    pBLEScan->setInterval(100);  // Faster scan interval
+    pBLEScan->setWindow(50);     // Shorter scan window
+    
+    BLEScanResults results = pBLEScan->start(scanTime); // Use class member instead of hardcoded 5
 
-    for (int i = 0; i < results.getCount(); i++) {
+    bool deviceFound = false;
+    for (int i = 0; i < results.getCount() && !deviceFound; i++) {
         BLEAdvertisedDevice dev = results.getDevice(i);
         if (dev.getAddress().toString() == targetAddress) {
             BLEManager::pushLog("[BLE] Target device found!");
+            deviceFound = true;
             connectToServer(dev.getAddress());
-            break;
         }
     }
+    
+    if (!deviceFound) {
+        BLEManager::pushLog("[BLE] Target device not found");
+    }
+    
+    // Clear scan results to free memory
+    pBLEScan->clearResults();
 }
 
 void BLEManager::begin() {

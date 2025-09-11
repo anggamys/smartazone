@@ -7,7 +7,7 @@
 
 class BLEManager {
 public:
-    explicit BLEManager(const char* targetAddress);
+    explicit BLEManager(const char* targetAddress, uint32_t scanTime = 5);
     void begin();
 
     bool connectToServer(BLEAddress address);
@@ -25,6 +25,7 @@ public:
 
 private:
     const char* targetAddress;
+    uint32_t scanTime;
     bool deviceConnected;
     bool reconnecting;
     unsigned long lastReconnectAttempt;
@@ -37,9 +38,9 @@ private:
 
     void scanDevices();
 
-    // internal logging queue
+    // internal logging queue - optimized for memory
     static void pushLog(const char* msg);
-    static String logBuffer;
+    static char logBuffer[64];  // Fixed size buffer instead of String
     static bool   hasLog;
 
     class MyClientCallback : public BLEClientCallbacks {

@@ -7,24 +7,33 @@ LoRaHandler::LoRaHandler(int nss, int dio1, int rst, int busy, int sck, int miso
 }
 
 bool LoRaHandler::begin(float frequency) {
+    Serial.println(F("[LoRa] Memulai inisialisasi SX1262..."));
+    
     // Reset chip manual
     pinMode(_rst, OUTPUT);
     digitalWrite(_rst, LOW);
     delay(10);
     digitalWrite(_rst, HIGH);
     delay(10);
+    
+    Serial.println(F("[LoRa] Reset chip selesai"));
 
     spi->begin(_sck, _miso, _mosi, _nss);
+    Serial.println(F("[LoRa] SPI interface initialized"));
+    
     radio = new SX1262(new Module(_nss, _dio1, _rst, _busy, *spi));
 
     int state = radio->begin(frequency, 125.0, 7, 5, 0x34, 14, 8, 0.0f, false);
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.print("[LoRa] LoRa init gagal, code: ");
+        Serial.print(F("[LoRa] LoRa init gagal, code: "));
         Serial.println(state);
         return false;
     }
 
-    Serial.println("[LoRa] Init sukses!");
+    Serial.print(F("[LoRa] Init sukses! Frekuensi: "));
+    Serial.print(frequency);
+    Serial.println(F(" MHz"));
+    Serial.println(F("[LoRa] Bandwidth: 125.0 kHz, SF: 7, CR: 4/5"));
     return true;
 }
 
