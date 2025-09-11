@@ -110,7 +110,7 @@ void setup() {
     lastStatusReport = millis();
     
     // Print startup summary
-    Serial.println(F("    SMARTAZONE DEVICE READY"));
+    Serial.println(F("[Main] Smartazone Device Ready"));
     if (isTransmitter) {
         Serial.println(F("Mode: TRANSMITTER (BLE → LoRa)"));
         Serial.println(F("- BLE: Mencari Heart Rate Monitor"));
@@ -244,7 +244,6 @@ void printSystemStatus() {
     uint32_t minutes = (uptime % 3600) / 60;
     uint32_t seconds = uptime % 60;
     
-    Serial.println(F("\n--- SYSTEM STATUS ---"));
     Serial.printf("Uptime: %02lu:%02lu:%02lu\n", hours, minutes, seconds);
     Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
     
@@ -265,5 +264,4 @@ void printSystemStatus() {
         Serial.println(F("LoRa: ERROR"));
     }
     
-    Serial.println(F("--- END STATUS ---\n"));
 }
