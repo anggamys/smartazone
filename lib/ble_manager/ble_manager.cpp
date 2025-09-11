@@ -1,189 +1,187 @@
 #include "ble_manager.h"
+#include <cstring>
 
-// buffer untuk log aman (diakses dari loop)
-char BLEManager::logBuffer[64] = {0};  // Fixed size buffer instead of String
+// static members
+char BLEManager::logBuffer[128] = {0};
 bool BLEManager::hasLog = false;
-
-// buffer HR callback
-static bool* hrFlagPtr = nullptr;
-static int*  hrBufferPtr = nullptr;
-
-void BLEManager::setHRAvailableFlag(bool* flag, int* buffer) {
-    hrFlagPtr   = flag;
-    hrBufferPtr = buffer;
-}
-
 int BLEManager::lastHeartRate = -1;
+
+// HR pointer storage
+static bool* hrFlagPtr = nullptr;
+static int* hrBufferPtr = nullptr;
 
 BLEManager::BLEManager(const char* targetAddress, uint32_t scanTime)
     : targetAddress(targetAddress),
       scanTime(scanTime),
       deviceConnected(false),
-      reconnecting(false),
       lastReconnectAttempt(0),
-      pClient(nullptr) {}
+      pClient(nullptr),
+      pClientCb(nullptr) {}
+
+void BLEManager::setHRAvailableFlag(bool* flag, int* buffer) {
+    hrFlagPtr = flag;
+    hrBufferPtr = buffer;
+}
 
 void BLEManager::pushLog(const char* msg) {
-    // Use a smaller buffer to save memory (64 chars instead of potentially larger String)
-    static char logBuffer[64] = {0};
-    strncpy(logBuffer, msg, 63);
-    logBuffer[63] = '\0';
-    hasLog = true;
+    // small safe copy
+    strncpy(BLEManager::logBuffer, msg, sizeof(BLEManager::logBuffer) - 1);
+    BLEManager::logBuffer[sizeof(BLEManager::logBuffer) - 1] = '\0';
+    BLEManager::hasLog = true;
 }
 
 bool BLEManager::popLog(String& out) {
     if (hasLog) {
-        out = String(logBuffer);
+        out = String(BLEManager::logBuffer);
         hasLog = false;
         return true;
     }
     return false;
 }
 
-// ---- callbacks ----
-void BLEManager::MyClientCallback::onConnect(BLEClient* pClient) {
+// callbacks
+void BLEManager::MyClientCallback::onConnect(BLEClient*) {
     parent->deviceConnected = true;
-    parent->reconnecting    = false;
-    BLEManager::pushLog("[BLE] Connected to device!");
+    parent->lastReconnectAttempt = 0;
+    BLEManager::pushLog("[BLE] Callback: connected");
 }
 
-void BLEManager::MyClientCallback::onDisconnect(BLEClient* pClient) {
+void BLEManager::MyClientCallback::onDisconnect(BLEClient*) {
     parent->deviceConnected = false;
-    parent->reconnecting    = true;
-    BLEManager::pushLog("[BLE] Disconnected, will attempt reconnect...");
+    BLEManager::pushLog("[BLE] Callback: disconnected");
 }
 
-// ---- core BLE ----
 bool BLEManager::connectToServer(BLEAddress address) {
     BLEManager::pushLog("[BLE] Connecting to server...");
 
-    if (pClient != nullptr && pClient->isConnected()) {
-        BLEManager::pushLog("[BLE] Already connected.");
-        return true;
-    }
-
     if (pClient != nullptr) {
+        if (pClient->isConnected()) {
+            BLEManager::pushLog("[BLE] Already connected.");
+            return true;
+        }
         pClient->disconnect();
         delete pClient;
         pClient = nullptr;
+        if (pClientCb) {
+            delete pClientCb;
+            pClientCb = nullptr;
+        }
     }
 
     pClient = BLEDevice::createClient();
-    pClient->setClientCallbacks(new MyClientCallback(this));
+    pClientCb = new MyClientCallback(this);
+    pClient->setClientCallbacks(pClientCb);
 
-    if (pClient->connect(address)) {
+    bool ok = pClient->connect(address);
+    if (ok) {
         BLEManager::pushLog("[BLE] Successfully connected to server.");
         deviceConnected = true;
-        reconnecting    = false;
         return true;
+    } else {
+        BLEManager::pushLog("[BLE] Failed to connect to server.");
+        deviceConnected = false;
+        return false;
     }
-
-    BLEManager::pushLog("[BLE] Failed to connect to server.");
-    deviceConnected = false;
-    return false;
 }
 
 bool BLEManager::connectToService(const BLEUUID& serviceUUID) {
     if (!deviceConnected || pClient == nullptr) {
-        BLEManager::pushLog("[BLE] Cannot connect to service.");
+        BLEManager::pushLog("[BLE] connectToService: not connected.");
         return false;
     }
-
-    BLERemoteService* pService = pClient->getService(serviceUUID);
-    if (!pService) {
+    BLERemoteService* svc = pClient->getService(serviceUUID);
+    if (!svc) {
         BLEManager::pushLog("[BLE] Service not found.");
         return false;
     }
-
-    BLEManager::pushLog("[BLE] Connected to service.");
+    BLEManager::pushLog("[BLE] Service found.");
     return true;
 }
 
 bool BLEManager::enableNotify(const BLEUUID& serviceUUID, const BLEUUID& charUUID) {
     if (!deviceConnected || pClient == nullptr) {
-        BLEManager::pushLog("[BLE] Not connected to server, cannot enable notify.");
+        BLEManager::pushLog("[BLE] enableNotify: not connected.");
         return false;
     }
-
-    BLERemoteService* pService = pClient->getService(serviceUUID);
-    if (!pService) {
-        BLEManager::pushLog("[BLE] Service not found.");
+    BLERemoteService* svc = pClient->getService(serviceUUID);
+    if (!svc) {
+        BLEManager::pushLog("[BLE] enableNotify: service not found.");
         return false;
     }
-
-    BLERemoteCharacteristic* pChar = pService->getCharacteristic(charUUID);
-    if (!pChar) {
-        BLEManager::pushLog("[BLE] Characteristic not found.");
+    BLERemoteCharacteristic* ch = svc->getCharacteristic(charUUID);
+    if (!ch) {
+        BLEManager::pushLog("[BLE] enableNotify: char not found.");
         return false;
     }
-
-    if (pChar->canNotify()) {
-        pChar->registerForNotify(heartRateNotifyCallback);
-        BLEManager::pushLog("[BLE] Notifications enabled.");
-        return true;
+    if (!ch->canNotify()) {
+        BLEManager::pushLog("[BLE] enableNotify: char cannot notify.");
+        return false;
     }
-
-    BLEManager::pushLog("[BLE] Characteristic cannot notify.");
-    return false;
+    ch->registerForNotify(heartRateNotifyCallback);
+    BLEManager::pushLog("[BLE] Notifications registered.");
+    return true;
 }
 
 void BLEManager::scanDevices() {
-    BLEManager::pushLog("[BLE] Scanning for devices...");
-    BLEScan* pBLEScan = BLEDevice::getScan();
-    pBLEScan->setActiveScan(true);
-    
-    // Optimize scan parameters for better performance and lower power
-    pBLEScan->setInterval(100);  // Faster scan interval
-    pBLEScan->setWindow(50);     // Shorter scan window
-    
-    BLEScanResults results = pBLEScan->start(scanTime); // Use class member instead of hardcoded 5
+    BLEManager::pushLog("[BLE] Starting scan...");
+    BLEScan* scan = BLEDevice::getScan();
+    scan->setActiveScan(true);
+    scan->setInterval(100);
+    scan->setWindow(50);
 
-    bool deviceFound = false;
-    for (int i = 0; i < results.getCount() && !deviceFound; i++) {
+    BLEScanResults results = scan->start(scanTime, false);
+    bool found = false;
+    String target = String(targetAddress);
+    target.toLowerCase();
+    for (int i = 0; i < results.getCount(); ++i) {
         BLEAdvertisedDevice dev = results.getDevice(i);
-        if (dev.getAddress().toString() == targetAddress) {
-            BLEManager::pushLog("[BLE] Target device found!");
-            deviceFound = true;
+        String addr = String(dev.getAddress().toString().c_str());
+        addr.toLowerCase();
+        if (addr == target) {
+            char tmp[128];
+            snprintf(tmp, sizeof(tmp), "[BLE] Found target: %s", addr.c_str());
+            BLEManager::pushLog(tmp);
+            found = true;
             connectToServer(dev.getAddress());
+            break;
         }
     }
-    
-    if (!deviceFound) {
-        BLEManager::pushLog("[BLE] Target device not found");
+    if (!found) {
+        BLEManager::pushLog("[BLE] Target not found");
     }
-    
-    // Clear scan results to free memory
-    pBLEScan->clearResults();
+    scan->clearResults();
 }
 
-void BLEManager::begin() {
-    BLEManager::pushLog("[BLE] Initializing BLE...");
-    BLEDevice::init("");
+void BLEManager::begin(const char* deviceName) {
+    BLEManager::pushLog("[BLE] BLE begin");
+    BLEDevice::deinit(true);
+    delay(150);
+    BLEDevice::init(deviceName);
+    delay(100);
     scanDevices();
 }
 
 bool BLEManager::tryReconnect() {
-    if (!deviceConnected && reconnecting &&
-        millis() - lastReconnectAttempt >= reconnectInterval) {
-        lastReconnectAttempt = millis();
-        BLEManager::pushLog("[BLE] Attempting reconnect...");
+    unsigned long now = millis();
+    if (!deviceConnected && (now - lastReconnectAttempt >= reconnectInterval)) {
+        lastReconnectAttempt = now;
+        BLEManager::pushLog("[BLE] tryReconnect: scanning...");
         scanDevices();
         return true;
     }
     return false;
 }
 
-// ---- HR notify callback ----
-void BLEManager::heartRateNotifyCallback(BLERemoteCharacteristic*,
-                                         uint8_t* pData, size_t length, bool) {
+// notify callback for HR characteristic
+void BLEManager::heartRateNotifyCallback(BLERemoteCharacteristic*, uint8_t* pData, size_t length, bool) {
     if (length > 1) {
-        bool is16bit = pData[0] & 0x01;
-        uint16_t hrValue = is16bit ? (pData[1] | (pData[2] << 8)) : pData[1];
-        lastHeartRate = hrValue;
-
+        bool is16 = pData[0] & 0x01;
+        uint16_t hr = is16 ? (pData[1] | (pData[2] << 8)) : pData[1];
+        lastHeartRate = hr;
         if (hrFlagPtr && hrBufferPtr) {
-            *hrBufferPtr = hrValue;
-            *hrFlagPtr   = true;
+            *hrBufferPtr = (int)hr;
+            *hrFlagPtr = true;
         }
+        // we cannot call pushLog here (ISR-like), but set a small flag handled by main
     }
 }

@@ -3,12 +3,11 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
-#include <functional>
 
 class BLEManager {
 public:
-    explicit BLEManager(const char* targetAddress, uint32_t scanTime = 5);
-    void begin();
+    explicit BLEManager(const char* targetAddress, uint32_t scanTime = 6);
+    void begin(const char* deviceName = "EoRa-S3-BLE");
 
     bool connectToServer(BLEAddress address);
     bool connectToService(const BLEUUID& serviceUUID);
@@ -18,19 +17,20 @@ public:
     bool isConnected() const { return deviceConnected; }
     int  getLastHeartRate() const { return lastHeartRate; }
 
+    // link to application HR buffers
     void setHRAvailableFlag(bool* flag, int* buffer);
 
-    // event flag getter
+    // pop logging messages produced by BLE manager
     bool popLog(String& out);
 
 private:
     const char* targetAddress;
     uint32_t scanTime;
     bool deviceConnected;
-    bool reconnecting;
     unsigned long lastReconnectAttempt;
     static constexpr unsigned long reconnectInterval = 5000; // ms
     BLEClient* pClient;
+    BLEClientCallbacks* pClientCb;
 
     static int lastHeartRate;
     static void heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
@@ -38,10 +38,10 @@ private:
 
     void scanDevices();
 
-    // internal logging queue - optimized for memory
+    // internal log storage (small ring of one message to avoid dynamic Strings)
     static void pushLog(const char* msg);
-    static char logBuffer[64];  // Fixed size buffer instead of String
-    static bool   hasLog;
+    static char logBuffer[128];
+    static bool hasLog;
 
     class MyClientCallback : public BLEClientCallbacks {
     public:

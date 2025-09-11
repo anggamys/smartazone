@@ -2,59 +2,76 @@
 
 LoRaHandler::LoRaHandler(int nss, int dio1, int rst, int busy, int sck, int miso, int mosi)
 : _nss(nss), _dio1(dio1), _rst(rst), _busy(busy), _sck(sck), _miso(miso), _mosi(mosi) {
-    spi = new SPIClass(FSPI);  // ESP32-S3 ada FSPI/HSPI
+    spi = new SPIClass(FSPI);
     radio = nullptr;
 }
 
+LoRaHandler::~LoRaHandler() {
+    if (radio) {
+        delete radio;
+        radio = nullptr;
+    }
+    if (spi) {
+        // don't delete SPIClass (keeps system SPI stable)
+        spi = nullptr;
+    }
+}
+
 bool LoRaHandler::begin(float frequency) {
-    Serial.println(F("[LoRa] Memulai inisialisasi SX1262..."));
-    
-    // Reset chip manual
+    Serial.println(F("[LoRa] Initializing SX1262..."));
+
     pinMode(_rst, OUTPUT);
     digitalWrite(_rst, LOW);
     delay(10);
     digitalWrite(_rst, HIGH);
     delay(10);
-    
-    Serial.println(F("[LoRa] Reset chip selesai"));
 
     spi->begin(_sck, _miso, _mosi, _nss);
-    Serial.println(F("[LoRa] SPI interface initialized"));
-    
+    Serial.println(F("[LoRa] SPI initialized"));
+
+    // Create module and radio
     radio = new SX1262(new Module(_nss, _dio1, _rst, _busy, *spi));
 
     int state = radio->begin(frequency, 125.0, 7, 5, 0x34, 14, 8, 0.0f, false);
     if (state != RADIOLIB_ERR_NONE) {
-        Serial.print(F("[LoRa] LoRa init gagal, code: "));
+        Serial.print(F("[LoRa] init failed code: "));
         Serial.println(state);
         return false;
     }
 
-    Serial.print(F("[LoRa] Init sukses! Frekuensi: "));
+    Serial.print(F("[LoRa] OK freq: "));
     Serial.print(frequency);
     Serial.println(F(" MHz"));
-    Serial.println(F("[LoRa] Bandwidth: 125.0 kHz, SF: 7, CR: 4/5"));
     return true;
 }
 
-void LoRaHandler::sendMessage(String message) {
-    int state = radio->transmit(message);
+void LoRaHandler::sendMessage(const String &message) {
+    if (!radio) {
+        Serial.println(F("[LoRa] sendMessage: radio not initialized"));
+        return;
+    }
+    // RadioLib::transmit expects a non-const String&, so make a local copy.
+    String msg = message;
+    int state = radio->transmit(msg);
     if (state == RADIOLIB_ERR_NONE) {
-        Serial.println("[LoRa] Pesan terkirim");
+        Serial.println(F("[LoRa] Pesan terkirim"));
     } else {
-        Serial.print("[LoRa] Gagal kirim, code: ");
+        Serial.print(F("[LoRa] transmit error code: "));
         Serial.println(state);
     }
 }
 
 bool LoRaHandler::receiveMessage(String &message, int &rssi, float &snr) {
-    String str;
-    int state = radio->receive(str);
+    if (!radio) return false;
+
+    String tmp;
+    int state = radio->receive(tmp); // this will block until receive or timeout configured in RadioLib internals
     if (state == RADIOLIB_ERR_NONE) {
-        message = str;
+        message = tmp;
         rssi = radio->getRSSI();
         snr = radio->getSNR();
         return true;
     }
+    // If RX timeout, just return false (no message)
     return false;
 }
