@@ -10,7 +10,7 @@ void handleLoRaReception();
 void printSystemStatus();
 
 // Config mode: TX or RX
-#define DEVICE_MODE_TX   0   // 1 = transmitter (BLE->LoRa), 0 = receiver (LoRa->MQTT)
+#define DEVICE_MODE_TX   1   // 1 = transmitter (BLE->LoRa), 0 = receiver (LoRa->MQTT)
 const bool isTransmitter = DEVICE_MODE_TX;
 
 // BLE target (Heart Rate Monitor) - use PROGMEM for string constants
