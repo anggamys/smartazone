@@ -4,51 +4,50 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 
-class BLEManager {
+class BLEManager
+{
 public:
-    explicit BLEManager(const char* targetAddress, uint32_t scanTime = 6);
-    void begin(const char* deviceName = "EoRa-S3-BLE");
+    explicit BLEManager(const char *targetAddress, uint32_t scanTime = 6);
+    void begin(const char *deviceName = "EoRa-S3-BLE");
 
-    bool connectToServer(BLEAddress address);
-    bool connectToService(const BLEUUID& serviceUUID);
-    bool enableNotify(const BLEUUID& serviceUUID, const BLEUUID& charUUID);
+    bool connect();
+    bool connectToServiceAndNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
     bool tryReconnect();
 
     bool isConnected() const { return deviceConnected; }
-    int  getLastHeartRate() const { return lastHeartRate; }
+    int getLastHeartRate() const { return lastHeartRate; }
 
-    // link to application HR buffers
-    void setHRAvailableFlag(bool* flag, int* buffer);
-
-    // pop logging messages produced by BLE manager
-    bool popLog(String& out);
+    void setHRAvailableFlag(bool *flag, int *buffer);
+    bool popLog(String &out);
 
 private:
-    const char* targetAddress;
+    const char *targetAddress;
     uint32_t scanTime;
     bool deviceConnected;
     unsigned long lastReconnectAttempt;
-    static constexpr unsigned long reconnectInterval = 5000; // ms
-    BLEClient* pClient;
-    BLEClientCallbacks* pClientCb;
+    static constexpr unsigned long reconnectInterval = 5000;
+
+    BLEClient *pClient;
+    class MyClientCallback;
 
     static int lastHeartRate;
-    static void heartRateNotifyCallback(BLERemoteCharacteristic* pChar,
-                                        uint8_t* pData, size_t length, bool isNotify);
+    static void heartRateNotifyCallback(BLERemoteCharacteristic *pChar,
+                                        uint8_t *pData, size_t length, bool isNotify);
 
-    void scanDevices();
+    BLEAddress scanTarget();
 
-    // internal log storage (small ring of one message to avoid dynamic Strings)
-    static void pushLog(const char* msg);
+    static void pushLog(const char *msg);
     static char logBuffer[128];
     static bool hasLog;
 
-    class MyClientCallback : public BLEClientCallbacks {
+    class MyClientCallback : public BLEClientCallbacks
+    {
     public:
-        explicit MyClientCallback(BLEManager* parent) : parent(parent) {}
-        void onConnect(BLEClient* pClient) override;
-        void onDisconnect(BLEClient* pClient) override;
+        explicit MyClientCallback(BLEManager *parent) : parent(parent) {}
+        void onConnect(BLEClient *) override;
+        void onDisconnect(BLEClient *) override;
+
     private:
-        BLEManager* parent;
-    };
+        BLEManager *parent;
+    } clientCb;
 };
