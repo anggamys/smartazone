@@ -1,9 +1,10 @@
 #include <Arduino.h>
 #include "ble_manager.h"
 #include "lora_manager.h"
+#include "mqtt_manager.h"
 
 // Mode: TX (BLE→LoRa) atau RX (LoRa-only)
-#define DEVICE_MODE_TX 1
+#define DEVICE_MODE_TX 0
 const bool isTransmitter = DEVICE_MODE_TX;
 
 // Alamat BLE (AOLON Curve)
@@ -25,9 +26,22 @@ static const uint8_t LORA_DIO1 = 33;
 static const uint8_t LORA_BUSY = 34;
 static const uint8_t LORA_RST = 8;
 
-LoRaHandler lora(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, LORA_SCK, LORA_MISO, LORA_MOSI);
+LoRaHandler lora(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY,
+                 LORA_SCK, LORA_MISO, LORA_MOSI);
 
-// timer
+// MQTT credentials (ganti sesuai server kamu)
+const char *WIFI_SSID = "Kopikopen 2";
+const char *WIFI_PASS = "kopikopen";
+const char *MQTT_SERVER = "192.168.1.205";
+const uint16_t MQTT_PORT = 1883;
+const char *MQTT_USER = "mqtt";
+const char *MQTT_PASS = "mqttpass";
+const char *MQTT_TOPIC = "device/heart_rate";
+
+// MQTT manager
+MqttManager mqtt(WIFI_SSID, WIFI_PASS, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS);
+
+// Timer
 struct Timers
 {
     uint32_t bleReconnect{0};
@@ -68,10 +82,9 @@ static String toHexString(const uint8_t *p, size_t n)
     return s;
 }
 
-// kirim trigger start HR ke control point (0x01). fallback vendor alt (0x15 → 0x01)
+// kirim trigger start HR ke control point (0x01)
 static void triggerHeartRateOnce()
 {
-    // coba 0x01
     if (!ble.writeControl(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x01))
     {
         Serial.println("[BLE] HR trigger 0x01 failed");
@@ -81,7 +94,7 @@ static void triggerHeartRateOnce()
         Serial.println("[BLE] HR trigger 0x01 sent");
         return;
     }
-    // fallback 0x15 → 0x01
+
     delay(120);
     if (!ble.writeControl(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x15))
     {
@@ -91,6 +104,7 @@ static void triggerHeartRateOnce()
     {
         Serial.println("[BLE] HR vendor pre-trigger 0x15 sent");
     }
+
     delay(120);
     if (ble.writeControl(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x01))
     {
@@ -129,12 +143,15 @@ void setup()
     else
     {
         Serial.println(F("[Main] Mode: RECEIVER"));
+
         if (!lora.begin(923.0))
         {
             Serial.println(F("[Main] LoRa RX init failed"));
             while (true)
                 delay(1000);
         }
+
+        mqtt.begin(); // inisialisasi MQTT di mode RX
     }
 }
 
@@ -150,7 +167,6 @@ void loop()
 
     if (isTransmitter)
     {
-        // reconnect BLE + re-enable notify + retrigger HR
         if (now - timers.bleReconnect >= BLE_RECONNECT_MS)
         {
             timers.bleReconnect = now;
@@ -169,7 +185,6 @@ void loop()
             }
         }
 
-        // kirim data tiap detik jika ada data baru
         if (now - timers.sendTick >= SEND_INTERVAL_MS)
         {
             timers.sendTick = now;
@@ -212,12 +227,21 @@ void loop()
     }
     else
     {
+        mqtt.loop(); // handle MQTT reconnect / publish queue
+
         String msg;
         int rssi;
         float snr;
+
         if (lora.receiveMessage(msg, rssi, snr))
         {
             Serial.printf("[RX] %s | RSSI:%d | SNR:%.1f\n", msg.c_str(), rssi, snr);
+
+            // publish otomatis ke MQTT
+            if (mqtt.isConnected())
+            {
+                mqtt.publish(MQTT_TOPIC, msg);
+            }
         }
     }
 
