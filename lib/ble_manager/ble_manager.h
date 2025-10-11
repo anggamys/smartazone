@@ -4,13 +4,16 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 
+// Struktur data mentah hasil BLE notify
 struct BleData
 {
     uint8_t payload[64];
     size_t length;
     uint32_t timestamp;
     bool ready;
-    bool isHeartRate;
+    BLEUUID serviceUUID;
+    BLEUUID charUUID;
+    bool isHeartRate; // tambahkan flag agar SensorManager tahu ini data HR
 };
 
 class BLEManager
@@ -22,16 +25,16 @@ public:
     bool tryReconnect();
     bool isConnected() const { return deviceConnected; }
 
-    // subscribe notify (isHR=true untuk 0x2A37)
-    bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID, bool isHR = false);
+    // Subscribe notify pada karakteristik (generic)
+    bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
-    // tulis 1 byte ke control point (contoh 0x2A39)
-    bool writeControl(const BLEUUID &serviceUUID, const BLEUUID &ctrlUUID, uint8_t value);
+    // Menulis 1 byte ke characteristic (misal control point)
+    bool writeByte(const BLEUUID &serviceUUID, const BLEUUID &charUUID, uint8_t value);
 
-    // akses data terakhir
+    // Ambil data BLE terakhir (raw)
     const BleData &getLastData() const { return lastBleData; }
 
-    // log ringkas
+    // Pop log event ringkas
     bool popLog(String &out);
 
 private:
@@ -46,8 +49,8 @@ private:
     BLEAddress scanTarget();
     BLERemoteCharacteristic *getCharacteristic(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
-    static void pushLog(const char *msg);
     static void notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify);
+    static void pushLog(const char *msg);
 
     static char logBuffer[128];
     static bool hasLog;
@@ -56,11 +59,11 @@ private:
     class MyClientCallback : public BLEClientCallbacks
     {
     public:
-        explicit MyClientCallback(BLEManager *p) : parent(p) {}
+        explicit MyClientCallback(BLEManager *parent) : parent_(parent) {}
         void onConnect(BLEClient *) override;
         void onDisconnect(BLEClient *) override;
 
     private:
-        BLEManager *parent;
+        BLEManager *parent_;
     } clientCb;
 };

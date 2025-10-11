@@ -1,7 +1,6 @@
 #include "ble_manager.h"
 #include <cstring>
 
-// static
 char BLEManager::logBuffer[128] = {0};
 bool BLEManager::hasLog = false;
 BleData BLEManager::lastBleData = {};
@@ -12,7 +11,9 @@ BLEManager::BLEManager(const char *targetAddress, uint32_t scanTime)
       deviceConnected(false),
       lastReconnectAttempt(0),
       pClient(nullptr),
-      clientCb(this) {}
+      clientCb(this)
+{
+}
 
 void BLEManager::pushLog(const char *msg)
 {
@@ -32,13 +33,14 @@ bool BLEManager::popLog(String &out)
 
 void BLEManager::MyClientCallback::onConnect(BLEClient *)
 {
-    parent->deviceConnected = true;
-    parent->lastReconnectAttempt = 0;
+    parent_->deviceConnected = true;
+    parent_->lastReconnectAttempt = 0;
     pushLog("[BLE] Connected");
 }
+
 void BLEManager::MyClientCallback::onDisconnect(BLEClient *)
 {
-    parent->deviceConnected = false;
+    parent_->deviceConnected = false;
     pushLog("[BLE] Disconnected");
 }
 
@@ -101,7 +103,7 @@ bool BLEManager::connect()
 
     deviceConnected = true;
     pushLog("[BLE] Connected to server");
-    delay(500); // beri waktu sebelum enable notify / control
+    delay(500);
     return true;
 }
 
@@ -123,53 +125,74 @@ BLERemoteCharacteristic *BLEManager::getCharacteristic(const BLEUUID &serviceUUI
         pushLog("[BLE] Not connected");
         return nullptr;
     }
+
     BLERemoteService *svc = pClient->getService(serviceUUID);
     if (!svc)
     {
         pushLog("[BLE] Service not found");
         return nullptr;
     }
+
     BLERemoteCharacteristic *ch = svc->getCharacteristic(charUUID);
     if (!ch)
     {
         pushLog("[BLE] Char not found");
         return nullptr;
     }
+
     return ch;
 }
 
-bool BLEManager::enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID, bool isHR)
+bool BLEManager::enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID)
 {
     BLERemoteCharacteristic *ch = getCharacteristic(serviceUUID, charUUID);
     if (!ch)
         return false;
 
-    lastBleData.isHeartRate = isHR;
+    lastBleData.serviceUUID = serviceUUID;
+    lastBleData.charUUID = charUUID;
     ch->registerForNotify(&BLEManager::notifyThunk);
     pushLog("[BLE] Notify enabled");
     return true;
 }
 
-bool BLEManager::writeControl(const BLEUUID &serviceUUID, const BLEUUID &ctrlUUID, uint8_t value)
+bool BLEManager::writeByte(const BLEUUID &serviceUUID, const BLEUUID &charUUID, uint8_t value)
 {
-    BLERemoteCharacteristic *ch = getCharacteristic(serviceUUID, ctrlUUID);
+    BLERemoteCharacteristic *ch = getCharacteristic(serviceUUID, charUUID);
     if (!ch)
         return false;
 
-    // beberapa device tidak set flag write dengan benar → kita tetap coba
     ch->writeValue(&value, 1, true);
-    pushLog("[BLE] Control written");
+    pushLog("[BLE] Write OK");
     return true;
 }
 
-// callback BLE task: super ringan
-void BLEManager::notifyThunk(BLERemoteCharacteristic *, uint8_t *data, size_t len, bool)
+void BLEManager::notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool)
 {
-    if (len == 0)
+    if (len == 0 || !ch)
         return;
-    const size_t copyLen = (len > sizeof(lastBleData.payload)) ? sizeof(lastBleData.payload) : len;
+
+    const size_t copyLen = min(len, sizeof(lastBleData.payload));
     memcpy(lastBleData.payload, data, copyLen);
     lastBleData.length = copyLen;
     lastBleData.timestamp = millis();
     lastBleData.ready = true;
+
+    BLERemoteService *svc = ch->getRemoteService();
+    if (svc)
+        lastBleData.serviceUUID = svc->getUUID();
+    else
+        lastBleData.serviceUUID = BLEUUID();
+
+    lastBleData.charUUID = ch->getUUID();
+
+    // deteksi otomatis heart rate UUID
+    String charStr = lastBleData.charUUID.toString().c_str();
+    charStr.toLowerCase();
+    lastBleData.isHeartRate = (charStr.indexOf("2a37") != -1);
+
+    if (lastBleData.isHeartRate)
+        pushLog("[BLE] Heart Rate data received");
+    else
+        pushLog("[BLE] Generic data received");
 }
