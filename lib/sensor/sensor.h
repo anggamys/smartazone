@@ -2,12 +2,15 @@
 #include <Arduino.h>
 #include "ble_manager.h"
 
-struct SensorData
+struct MultiSensorData
 {
-    String type; // HR, SPO2, STRESS
-    float value; // nilai terukur
+    float hr;
+    float spo2;
+    float stress;
+    bool hr_valid;
+    bool spo2_valid;
+    bool stress_valid;
     uint32_t timestamp;
-    bool valid;
 };
 
 class SensorManager
@@ -15,10 +18,10 @@ class SensorManager
 public:
     SensorManager();
     void updateFromBle(const BleData &bleData);
-    const SensorData &getData() const { return currentData; }
+    MultiSensorData getCombinedData() const;
 
 private:
-    SensorData currentData;
+    MultiSensorData data;
 
     int parseHeartRate(const uint8_t *data, size_t len);
     int parseSpO2(const uint8_t *data, size_t len);

@@ -2,59 +2,90 @@
 
 SensorManager::SensorManager()
 {
-    currentData = {"NONE", 0.0f, 0, false};
+    data = {0, 0, 0, false, false, false, 0};
 }
 
 void SensorManager::updateFromBle(const BleData &bleData)
 {
     if (!bleData.ready)
-    {
-        currentData.valid = false;
         return;
-    }
 
-    const uint8_t *data = bleData.payload;
+    const uint8_t *d = bleData.payload;
     size_t len = bleData.length;
 
-    // ================= Heart Rate =================
+    Serial.print("[BLE RAW] ");
+    for (size_t i = 0; i < len; i++)
+    {
+        Serial.printf("%02X ", d[i]);
+    }
+    Serial.println();
+
+    data.timestamp = bleData.timestamp;
+
+    // 1. Heart Rate standar (UUID 2A37)
     if (bleData.isHeartRate)
     {
-        int hr = parseHeartRate(data, len);
-        currentData = (hr > 0)
-                          ? SensorData{"HR", (float)hr, bleData.timestamp, true}
-                          : SensorData{"HR_RAW", -1, bleData.timestamp, false};
+        int hr = parseHeartRate(d, len);
+        if (hr > 0)
+        {
+            data.hr = hr;
+            data.hr_valid = true;
+            Serial.printf("[BLE] HR (UUID) %d bpm\n", hr);
+        }
         return;
     }
 
-    // ================= Aolon Curve Payload =================
-    if (len >= 6 && data[0] == 0xFE && data[1] == 0xEA && data[2] == 0x20)
+    // 2. Aolon custom packet
+    if (len >= 5 && d[0] == 0xFE && d[1] == 0xEA && d[2] == 0x20)
     {
-        // Tipe data ditentukan oleh byte ke-3 (index 3)
-        uint8_t typeByte = data[3];
+        uint8_t typeByte = d[3];
 
-        if (typeByte == 0x06) // SPO2
+        if (typeByte == 0x06)
         {
-            int spo2 = parseSpO2(data, len);
-            currentData = (spo2 > 0)
-                              ? SensorData{"SPO2", (float)spo2, bleData.timestamp, true}
-                              : SensorData{"SPO2_RAW", -1, bleData.timestamp, false};
+            // Paket 0x06 bisa HR atau SPO2 tergantung panjang payload
+            if (len <= 6)
+            {
+                // HR (contoh FE EA 20 06 5A)
+                int hr = d[len - 1];
+                if (hr >= 30 && hr <= 220)
+                {
+                    data.hr = hr;
+                    data.hr_valid = true;
+                    Serial.printf("[BLE] HR (FEEA) %d bpm\n", hr);
+                }
+            }
+            else
+            {
+                // SPO2 (contoh FE EA 20 06 6B 62)
+                int spo2 = parseSpO2(d, len);
+                if (spo2 > 0)
+                {
+                    data.spo2 = spo2;
+                    data.spo2_valid = true;
+                    Serial.printf("[BLE] SPO2 %d %%\n", spo2);
+                }
+            }
         }
-        else if (typeByte == 0x08) // STRESS
+        else if (typeByte == 0x08)
         {
-            int stress = parseStress(data, len);
-            currentData = (stress >= 0)
-                              ? SensorData{"STRESS", (float)stress, bleData.timestamp, true}
-                              : SensorData{"STRESS_RAW", -1, bleData.timestamp, false};
+            int stress = parseStress(d, len);
+            if (stress >= 0)
+            {
+                data.stress = stress;
+                data.stress_valid = true;
+                Serial.printf("[BLE] STRESS %d\n", stress);
+            }
         }
         else
         {
-            currentData = {"RAW", 0, bleData.timestamp, false};
+            Serial.println("[BLE] Unknown FEEA type");
         }
     }
-    else
-    {
-        currentData = {"RAW", 0, bleData.timestamp, false};
-    }
+}
+
+MultiSensorData SensorManager::getCombinedData() const
+{
+    return data;
 }
 
 // ================= Parsing =================
@@ -63,7 +94,6 @@ int SensorManager::parseHeartRate(const uint8_t *data, size_t len)
 {
     if (len < 2)
         return -1;
-
     bool is16bit = data[0] & 0x01;
     int hr = is16bit && len >= 3 ? (data[1] | (data[2] << 8)) : data[1];
     return (hr >= 30 && hr <= 220) ? hr : -1;
@@ -71,26 +101,20 @@ int SensorManager::parseHeartRate(const uint8_t *data, size_t len)
 
 int SensorManager::parseSpO2(const uint8_t *data, size_t len)
 {
-    // FE EA 20 06 6B 62 → ambil byte terakhir
     if (len < 6)
         return -1;
-
     uint8_t val = data[len - 1];
     return (val != 0xFF && val <= 100) ? val : -1;
 }
 
 int SensorManager::parseStress(const uint8_t *data, size_t len)
 {
-    // FE EA 20 08 B9 11 00 2C → ambil 2 byte terakhir (16 bit)
     if (len < 8)
         return -1;
-
     uint8_t low = data[len - 1];
     uint8_t high = data[len - 2];
-
     if (low == 0xFF && high == 0xFF)
         return -1;
-
     uint16_t val = (high << 8) | low;
     return val;
 }
