@@ -1,5 +1,10 @@
 #include "ble_manager.h"
 #include <cstring>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+// Mutex untuk mencegah race antara notify dan reconnect
+static SemaphoreHandle_t bleMutex = xSemaphoreCreateMutex();
 
 char BLEManager::logBuffer[128] = {0};
 bool BLEManager::hasLog = false;
@@ -42,6 +47,9 @@ void BLEManager::MyClientCallback::onDisconnect(BLEClient *)
 {
     parent_->deviceConnected = false;
     pushLog("[BLE] Disconnected");
+
+    // Beri waktu stack BLE internal menyelesaikan cleanup
+    delay(200);
 }
 
 BLEAddress BLEManager::scanTarget()
@@ -83,6 +91,7 @@ bool BLEManager::connect()
     if (!addr.toString().length())
         return false;
 
+    // pastikan client lama dilepas
     if (pClient)
     {
         if (pClient->isConnected())
@@ -103,6 +112,8 @@ bool BLEManager::connect()
 
     deviceConnected = true;
     pushLog("[BLE] Connected to server");
+
+    // beri waktu BLE stack internal siap sebelum enableNotify
     delay(500);
     return true;
 }
@@ -145,12 +156,16 @@ BLERemoteCharacteristic *BLEManager::getCharacteristic(const BLEUUID &serviceUUI
 
 bool BLEManager::enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID)
 {
+    // jeda singkat agar service siap setelah connect
+    delay(300);
+
     BLERemoteCharacteristic *ch = getCharacteristic(serviceUUID, charUUID);
     if (!ch)
         return false;
 
     lastBleData.serviceUUID = serviceUUID;
     lastBleData.charUUID = charUUID;
+
     ch->registerForNotify(&BLEManager::notifyThunk);
     pushLog("[BLE] Notify enabled");
     return true;
@@ -161,26 +176,32 @@ void BLEManager::notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t 
     if (len == 0 || !ch)
         return;
 
-    const size_t copyLen = min(len, sizeof(lastBleData.payload));
-    memcpy(lastBleData.payload, data, copyLen);
-    lastBleData.length = copyLen;
-    lastBleData.timestamp = millis();
-    lastBleData.ready = true;
+    // proteksi akses bersama
+    if (xSemaphoreTake(bleMutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    {
+        const size_t copyLen = min(len, sizeof(lastBleData.payload));
+        memcpy(lastBleData.payload, data, copyLen);
+        lastBleData.length = copyLen;
+        lastBleData.timestamp = millis();
+        lastBleData.ready = true;
 
-    BLERemoteService *svc = ch->getRemoteService();
-    if (svc)
-        lastBleData.serviceUUID = svc->getUUID();
-    else
-        lastBleData.serviceUUID = BLEUUID();
+        BLERemoteService *svc = ch->getRemoteService();
+        if (svc)
+            lastBleData.serviceUUID = svc->getUUID();
+        else
+            lastBleData.serviceUUID = BLEUUID();
 
-    lastBleData.charUUID = ch->getUUID();
+        lastBleData.charUUID = ch->getUUID();
 
-    String charStr = lastBleData.charUUID.toString().c_str();
-    charStr.toLowerCase();
-    lastBleData.isHeartRate = (charStr.indexOf("2a37") != -1);
+        String charStr = lastBleData.charUUID.toString().c_str();
+        charStr.toLowerCase();
+        lastBleData.isHeartRate = (charStr.indexOf("2a37") != -1);
 
-    if (lastBleData.isHeartRate)
-        pushLog("[BLE] Heart Rate data received");
-    else
-        pushLog("[BLE] Generic data received");
+        if (lastBleData.isHeartRate)
+            pushLog("[BLE] Heart Rate data received");
+        else
+            pushLog("[BLE] Generic data received");
+
+        xSemaphoreGive(bleMutex);
+    }
 }

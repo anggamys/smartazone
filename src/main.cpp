@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <time.h>
+
 #include "ble_manager.h"
 #include "lora_manager.h"
 #include "mqtt_manager.h"
@@ -23,7 +26,7 @@ static String toHexString(const uint8_t *data, size_t len)
 #define DEVICE_MODE_TX 1
 const bool isTransmitter = DEVICE_MODE_TX;
 
-// BLE target (AOLON Curve)
+// BLE target
 const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
 
 // Heart Rate Service & Characteristic
@@ -47,9 +50,9 @@ LoRaHandler lora(
     LORA_SCK, LORA_MISO, LORA_MOSI);
 
 // MQTT credentials
-const char *WIFI_SSID = "Kopikopen 2";
-const char *WIFI_PASS = "kopikopen";
-const char *MQTT_SERVER = "192.168.1.205";
+const char *WIFI_SSID = "Warkop Kongkoow 2";
+const char *WIFI_PASS = "pesanduluyah2";
+const char *MQTT_SERVER = "192.168.1.44";
 const uint16_t MQTT_PORT = 1883;
 const char *MQTT_USER = "mqtt";
 const char *MQTT_PASS = "mqttpass";
@@ -76,10 +79,66 @@ uint32_t lastSentTs = 0;
 // Cache sensor terakhir yang valid
 SensorData lastValidSensor = {"NONE", 0, 0, false};
 
+// Waktu sinkronisasi
+time_t bootEpoch = 0;
+unsigned long bootMillis = 0;
+bool ntpSynced = false;
+
+// Sinkronisasi waktu NTP sekali saat startup
+void setupTime()
+{
+    Serial.print("[Time] Connecting WiFi for NTP...");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println("\n[Time] WiFi connected");
+        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // WIB
+        delay(2000);
+
+        time_t now;
+        if (time(&now))
+        {
+            bootEpoch = now;
+            bootMillis = millis();
+            ntpSynced = true;
+            Serial.printf("[Time] NTP sync success: %lu\n", (unsigned long)now);
+        }
+        else
+        {
+            Serial.println("[Time] NTP sync failed");
+        }
+
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
+    else
+    {
+        Serial.println("\n[Time] WiFi not connected, fallback to millis()");
+    }
+}
+
+// Ambil waktu epoch (real atau fallback)
+time_t getCurrentTime()
+{
+    if (ntpSynced)
+        return bootEpoch + ((millis() - bootMillis) / 1000);
+    else
+        return millis() / 1000;
+}
+
 void setup()
 {
     Serial.begin(115200);
     delay(300);
+
+    setupTime();
 
     if (isTransmitter)
     {
@@ -136,8 +195,11 @@ void loop()
                 Serial.println("[BLE] Trying reconnect...");
                 if (ble.tryReconnect())
                 {
-                    ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID));
-                    Serial.println("[BLE] Notify re-enabled after reconnect");
+                    delay(1000); // jeda aman sebelum enable notify
+                    if (ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID)))
+                        Serial.println("[BLE] Notify re-enabled after reconnect");
+                    else
+                        Serial.println("[BLE] Enable notify failed after reconnect");
                 }
             }
         }
@@ -152,7 +214,7 @@ void loop()
             if (raw.ready)
             {
                 sensor.updateFromBle(raw);
-                ((BleData &)raw).ready = false; // reset flag
+                ((BleData &)raw).ready = false;
             }
 
             const SensorData &s = sensor.getData();
@@ -164,9 +226,17 @@ void loop()
             // Gunakan cache jika belum ada data baru
             if (lastValidSensor.valid)
             {
+                time_t currentTime = getCurrentTime();
+
+                // Format waktu lokal (YYYY-MM-DD HH:MM:SS)
+                struct tm timeinfo;
+                localtime_r(&currentTime, &timeinfo);
+                char timeStr[20];
+                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
                 String msg = lastValidSensor.type + "," +
                              String(lastValidSensor.value, 1) +
-                             ",T," + String(lastValidSensor.timestamp);
+                             ",T," + String(timeStr);
 
                 lora.sendMessage(msg);
                 Serial.println("[LoRa] Sent (cached): " + msg);
