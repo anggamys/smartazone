@@ -4,6 +4,7 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 
+// Struktur data BLE mentah terakhir
 struct BleData
 {
     uint8_t payload[64];
@@ -24,11 +25,17 @@ public:
     bool tryReconnect();
     bool isConnected() const { return deviceConnected; }
 
-    // hanya enable notify, tidak ada fungsi tulis
     bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
     const BleData &getLastData() const { return lastBleData; }
     bool popLog(String &out);
+
+    // Sensor trigger commands
+    bool triggerSpO2();
+    bool triggerStress();
+
+    // Generic write function
+    bool writeBytes(const BLEUUID &serviceUUID, const BLEUUID &charUUID, const uint8_t *data, size_t len);
 
 private:
     const char *targetAddress;

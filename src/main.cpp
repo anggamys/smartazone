@@ -7,32 +7,21 @@
 #include "mqtt_manager.h"
 #include "sensor.h"
 
-// Helper konversi payload ke hex
-static String toHexString(const uint8_t *data, size_t len)
-{
-    String s;
-    s.reserve(len * 2);
-    const char hexChars[] = "0123456789ABCDEF";
-    for (size_t i = 0; i < len; ++i)
-    {
-        uint8_t v = data[i];
-        s += hexChars[(v >> 4) & 0x0F];
-        s += hexChars[v & 0x0F];
-    }
-    return s;
-}
-
-// Mode: TX (BLE→LoRa) atau RX (LoRa→MQTT)
+// =============================================
+// Konfigurasi utama
+// =============================================
 #define DEVICE_MODE_TX 1
 const bool isTransmitter = DEVICE_MODE_TX;
 
-// BLE target
+// BLE target (AOLON Curve)
 const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
 
-// Heart Rate Service & Characteristic
-#define HR_SERVICE_UUID "0000180d-0000-1000-8000-00805f9b34fb"
-#define HR_CHAR_UUID "00002a37-0000-1000-8000-00805f9b34fb"
+// Service & characteristic untuk AOLON
+#define AOLON_SERVICE_UUID "0000feea-0000-1000-8000-00805f9b34fb"
+#define AOLON_WRITE_UUID "0000fee2-0000-1000-8000-00805f9b34fb"
+#define AOLON_NOTIFY_UUID "0000fee3-0000-1000-8000-00805f9b34fb"
 
+// BLE instance
 BLEManager ble(targetAddress, 6);
 SensorManager sensor;
 
@@ -60,36 +49,38 @@ const char *MQTT_TOPIC = "device/heart_rate";
 
 MqttManager mqtt(WIFI_SSID, WIFI_PASS, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS);
 
-// Timer
+// =============================================
+// Timer dan state
+// =============================================
 struct Timers
 {
     uint32_t bleReconnect{0};
     uint32_t sendTick{0};
     uint32_t status{0};
+    uint32_t triggerTick{0};
 } timers;
 
-static const uint32_t BLE_RECONNECT_MS = 3000;
+static const uint32_t BLE_RECONNECT_MS = 5000;
 static const uint32_t SEND_INTERVAL_MS = 1000;
 static const uint32_t STATUS_INTERVAL_MS = 60000;
+static const uint32_t TRIGGER_INTERVAL_MS = 15000;
 
-// Log
 String bleLog;
-uint32_t lastSentTs = 0;
-
-// Cache sensor terakhir yang valid
 SensorData lastValidSensor = {"NONE", 0, 0, false};
 
-// Waktu sinkronisasi
+// =============================================
+// Sinkronisasi waktu (NTP)
+// =============================================
 time_t bootEpoch = 0;
 unsigned long bootMillis = 0;
 bool ntpSynced = false;
 
-// Sinkronisasi waktu NTP sekali saat startup
 void setupTime()
 {
     Serial.print("[Time] Connecting WiFi for NTP...");
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     unsigned long start = millis();
+
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000)
     {
         delay(500);
@@ -99,7 +90,7 @@ void setupTime()
     if (WiFi.status() == WL_CONNECTED)
     {
         Serial.println("\n[Time] WiFi connected");
-        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // WIB
+        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov");
         delay(2000);
 
         time_t now;
@@ -111,28 +102,25 @@ void setupTime()
             Serial.printf("[Time] NTP sync success: %lu\n", (unsigned long)now);
         }
         else
-        {
             Serial.println("[Time] NTP sync failed");
-        }
 
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
     }
     else
-    {
         Serial.println("\n[Time] WiFi not connected, fallback to millis()");
-    }
 }
 
-// Ambil waktu epoch (real atau fallback)
 time_t getCurrentTime()
 {
     if (ntpSynced)
         return bootEpoch + ((millis() - bootMillis) / 1000);
-    else
-        return millis() / 1000;
+    return millis() / 1000;
 }
 
+// =============================================
+// Setup awal
+// =============================================
 void setup()
 {
     Serial.begin(115200);
@@ -145,10 +133,10 @@ void setup()
         Serial.println(F("[Main] Mode: TRANSMITTER"));
         ble.begin("EoRa-S3");
 
-        // Enable notify HR characteristic
-        if (!ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID)))
+        // enable notify untuk FEEA:FEE3
+        if (!ble.enableNotify(BLEUUID(AOLON_SERVICE_UUID), BLEUUID(AOLON_NOTIFY_UUID)))
         {
-            Serial.println(F("[Main] Enable HR notify failed"));
+            Serial.println(F("[Main] Enable notify failed"));
         }
 
         if (!lora.begin(923.0))
@@ -172,18 +160,37 @@ void setup()
     }
 }
 
+// =============================================
+// Fungsi kirim data
+// =============================================
+void sendSensorData(const SensorData &s)
+{
+    time_t currentTime = getCurrentTime();
+    struct tm timeinfo;
+    localtime_r(&currentTime, &timeinfo);
+    char timeStr[20];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+    String msg = s.type + "," + String(s.value, 1) + ",T," + String(timeStr);
+    lora.sendMessage(msg);
+    Serial.println("[LoRa] Sent: " + msg);
+}
+
+// =============================================
+// Loop utama
+// =============================================
 void loop()
 {
     uint32_t now = millis();
 
-    // status log periodik
+    // Log status periodik
     if (now - timers.status >= STATUS_INTERVAL_MS)
     {
         timers.status = now;
         Serial.printf("[Status] Uptime:%lus | Heap:%u bytes\n", now / 1000, ESP.getFreeHeap());
     }
 
-    // TX MODE: BLE → LoRa
+    // ===================== TX MODE =====================
     if (isTransmitter)
     {
         // Reconnect BLE jika terputus
@@ -192,16 +199,24 @@ void loop()
             timers.bleReconnect = now;
             if (!ble.isConnected())
             {
-                Serial.println("[BLE] Trying reconnect...");
+                Serial.println("[BLE] Reconnecting...");
                 if (ble.tryReconnect())
                 {
-                    delay(1000); // jeda aman sebelum enable notify
-                    if (ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID)))
-                        Serial.println("[BLE] Notify re-enabled after reconnect");
-                    else
-                        Serial.println("[BLE] Enable notify failed after reconnect");
+                    delay(1000);
+                    ble.enableNotify(BLEUUID(AOLON_SERVICE_UUID), BLEUUID(AOLON_NOTIFY_UUID));
+                    Serial.println("[BLE] Notify re-enabled after reconnect");
                 }
             }
+        }
+
+        // Trigger sensor setiap beberapa detik agar SPO2/Stress aktif
+        if (ble.isConnected() && (now - timers.triggerTick >= TRIGGER_INTERVAL_MS))
+        {
+            timers.triggerTick = now;
+            Serial.println("[BLE] Triggering sensors...");
+            ble.triggerSpO2();
+            delay(200);
+            ble.triggerStress();
         }
 
         // Kirim data periodik
@@ -210,7 +225,6 @@ void loop()
             timers.sendTick = now;
             const BleData &raw = ble.getLastData();
 
-            // Jika ada data baru
             if (raw.ready)
             {
                 sensor.updateFromBle(raw);
@@ -218,40 +232,20 @@ void loop()
             }
 
             const SensorData &s = sensor.getData();
-
-            // Simpan data valid terbaru
             if (s.valid)
                 lastValidSensor = s;
 
-            // Gunakan cache jika belum ada data baru
             if (lastValidSensor.valid)
-            {
-                time_t currentTime = getCurrentTime();
-
-                // Format waktu lokal (YYYY-MM-DD HH:MM:SS)
-                struct tm timeinfo;
-                localtime_r(&currentTime, &timeinfo);
-                char timeStr[20];
-                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
-
-                String msg = lastValidSensor.type + "," +
-                             String(lastValidSensor.value, 1) +
-                             ",T," + String(timeStr);
-
-                lora.sendMessage(msg);
-                Serial.println("[LoRa] Sent (cached): " + msg);
-            }
+                sendSensorData(lastValidSensor);
             else
-            {
                 Serial.println("[BLE] No valid data to send");
-            }
 
             if (ble.popLog(bleLog))
                 Serial.println(bleLog);
         }
     }
 
-    // RX MODE: LoRa → MQTT
+    // ===================== RX MODE =====================
     else
     {
         mqtt.loop();
@@ -262,7 +256,6 @@ void loop()
         if (lora.receiveMessage(msg, rssi, snr))
         {
             Serial.printf("[RX] %s | RSSI:%d | SNR:%.1f\n", msg.c_str(), rssi, snr);
-
             if (mqtt.isConnected())
                 mqtt.publish(MQTT_TOPIC, msg);
         }

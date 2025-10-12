@@ -4,8 +4,8 @@
 
 struct SensorData
 {
-    String type; // contoh: "HR"
-    float value; // hasil parsing
+    String type; // HR, SPO2, STRESS
+    float value; // nilai terukur
     uint32_t timestamp;
     bool valid;
 };
@@ -17,11 +17,10 @@ public:
     void updateFromBle(const BleData &bleData);
     const SensorData &getData() const { return currentData; }
 
-    // Boleh public agar bisa digunakan untuk debug
-    String toHexString(const uint8_t *p, size_t n);
-
 private:
     SensorData currentData;
 
     int parseHeartRate(const uint8_t *data, size_t len);
+    int parseSpO2(const uint8_t *data, size_t len);
+    int parseStress(const uint8_t *data, size_t len);
 };
