@@ -4,7 +4,6 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 
-// Struktur data mentah hasil BLE notify
 struct BleData
 {
     uint8_t payload[64];
@@ -13,7 +12,7 @@ struct BleData
     bool ready;
     BLEUUID serviceUUID;
     BLEUUID charUUID;
-    bool isHeartRate; // tambahkan flag agar SensorManager tahu ini data HR
+    bool isHeartRate;
 };
 
 class BLEManager
@@ -25,16 +24,10 @@ public:
     bool tryReconnect();
     bool isConnected() const { return deviceConnected; }
 
-    // Subscribe notify pada karakteristik (generic)
+    // hanya enable notify, tidak ada fungsi tulis
     bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
-    // Menulis 1 byte ke characteristic (misal control point)
-    bool writeByte(const BLEUUID &serviceUUID, const BLEUUID &charUUID, uint8_t value);
-
-    // Ambil data BLE terakhir (raw)
     const BleData &getLastData() const { return lastBleData; }
-
-    // Pop log event ringkas
     bool popLog(String &out);
 
 private:

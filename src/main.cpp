@@ -23,13 +23,12 @@ static String toHexString(const uint8_t *data, size_t len)
 #define DEVICE_MODE_TX 1
 const bool isTransmitter = DEVICE_MODE_TX;
 
-// BLE Target (AOLON Curve)
+// BLE target (AOLON Curve)
 const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
 
 // Heart Rate Service & Characteristic
 #define HR_SERVICE_UUID "0000180d-0000-1000-8000-00805f9b34fb"
-#define HR_CHAR_UUID "00002a37-0000-1000-8000-00805f9b34fb"          // notify only
-#define HR_CONTROL_POINT_UUID "00002a39-0000-1000-8000-00805f9b34fb" // write 0x01 (start measurement)
+#define HR_CHAR_UUID "00002a37-0000-1000-8000-00805f9b34fb"
 
 BLEManager ble(targetAddress, 6);
 SensorManager sensor;
@@ -74,35 +73,8 @@ static const uint32_t STATUS_INTERVAL_MS = 60000;
 String bleLog;
 uint32_t lastSentTs = 0;
 
-// Trigger start heart rate measurement
-static void triggerHeartRateOnce()
-{
-    if (!ble.writeByte(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x01))
-    {
-        Serial.println("[BLE] HR trigger 0x01 failed");
-    }
-    else
-    {
-        Serial.println("[BLE] HR trigger 0x01 sent");
-        return;
-    }
-
-    delay(120);
-    if (!ble.writeByte(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x15))
-    {
-        Serial.println("[BLE] HR vendor pre-trigger 0x15 failed");
-    }
-    else
-    {
-        Serial.println("[BLE] HR vendor pre-trigger 0x15 sent");
-    }
-
-    delay(120);
-    if (ble.writeByte(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CONTROL_POINT_UUID), 0x01))
-    {
-        Serial.println("[BLE] HR trigger 0x01 re-sent");
-    }
-}
+// Cache sensor terakhir yang valid
+SensorData lastValidSensor = {"NONE", 0, 0, false};
 
 void setup()
 {
@@ -114,15 +86,10 @@ void setup()
         Serial.println(F("[Main] Mode: TRANSMITTER"));
         ble.begin("EoRa-S3");
 
-        // enable notify HR
+        // Enable notify HR characteristic
         if (!ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID)))
         {
             Serial.println(F("[Main] Enable HR notify failed"));
-        }
-        else
-        {
-            delay(300);
-            triggerHeartRateOnce();
         }
 
         if (!lora.begin(923.0))
@@ -136,14 +103,12 @@ void setup()
     else
     {
         Serial.println(F("[Main] Mode: RECEIVER"));
-
         if (!lora.begin(923.0))
         {
             Serial.println(F("[Main] LoRa RX init failed"));
             while (true)
                 delay(1000);
         }
-
         mqtt.begin();
     }
 }
@@ -152,17 +117,17 @@ void loop()
 {
     uint32_t now = millis();
 
-    // Status
+    // status log periodik
     if (now - timers.status >= STATUS_INTERVAL_MS)
     {
         timers.status = now;
         Serial.printf("[Status] Uptime:%lus | Heap:%u bytes\n", now / 1000, ESP.getFreeHeap());
     }
 
-    // TX MODE → BLE + LoRa
+    // TX MODE: BLE → LoRa
     if (isTransmitter)
     {
-        // Reconnect BLE
+        // Reconnect BLE jika terputus
         if (now - timers.bleReconnect >= BLE_RECONNECT_MS)
         {
             timers.bleReconnect = now;
@@ -171,12 +136,8 @@ void loop()
                 Serial.println("[BLE] Trying reconnect...");
                 if (ble.tryReconnect())
                 {
-                    if (ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID)))
-                    {
-                        Serial.println("[BLE] Notify re-enabled");
-                        delay(300);
-                        triggerHeartRateOnce();
-                    }
+                    ble.enableNotify(BLEUUID(HR_SERVICE_UUID), BLEUUID(HR_CHAR_UUID));
+                    Serial.println("[BLE] Notify re-enabled after reconnect");
                 }
             }
         }
@@ -187,44 +148,43 @@ void loop()
             timers.sendTick = now;
             const BleData &raw = ble.getLastData();
 
-            if (!raw.ready)
+            // Jika ada data baru
+            if (raw.ready)
             {
-                static bool shown = false;
-                if (!shown)
-                {
-                    Serial.println("[BLE] No data yet");
-                    shown = true;
-                }
+                sensor.updateFromBle(raw);
+                ((BleData &)raw).ready = false; // reset flag
+            }
+
+            const SensorData &s = sensor.getData();
+
+            // Simpan data valid terbaru
+            if (s.valid)
+                lastValidSensor = s;
+
+            // Gunakan cache jika belum ada data baru
+            if (lastValidSensor.valid)
+            {
+                String msg = lastValidSensor.type + "," +
+                             String(lastValidSensor.value, 1) +
+                             ",T," + String(lastValidSensor.timestamp);
+
+                lora.sendMessage(msg);
+                Serial.println("[LoRa] Sent (cached): " + msg);
             }
             else
             {
-                String msg = "RAW," + toHexString(raw.payload, raw.length) + ",T," + String(raw.timestamp);
-                lastSentTs = raw.timestamp;
-
-                // Proses data melalui SensorManager
-                sensor.updateFromBle(raw);
-                const SensorData &s = sensor.getData();
-
-                if (s.valid)
-                {
-                    msg = s.type + "," + String(s.value, 1) + ",T," + String(s.timestamp);
-                }
-
-                lora.sendMessage(msg);
-                Serial.println("[LoRa] Sent: " + msg);
-                ((BleData &)raw).ready = false;
+                Serial.println("[BLE] No valid data to send");
             }
 
-            // BLE log
             if (ble.popLog(bleLog))
                 Serial.println(bleLog);
         }
     }
-    // RX MODE → LoRa → MQTT
+
+    // RX MODE: LoRa → MQTT
     else
     {
         mqtt.loop();
-
         String msg;
         int rssi;
         float snr;
@@ -234,9 +194,7 @@ void loop()
             Serial.printf("[RX] %s | RSSI:%d | SNR:%.1f\n", msg.c_str(), rssi, snr);
 
             if (mqtt.isConnected())
-            {
                 mqtt.publish(MQTT_TOPIC, msg);
-            }
         }
     }
 

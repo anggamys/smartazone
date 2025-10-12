@@ -156,17 +156,6 @@ bool BLEManager::enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUI
     return true;
 }
 
-bool BLEManager::writeByte(const BLEUUID &serviceUUID, const BLEUUID &charUUID, uint8_t value)
-{
-    BLERemoteCharacteristic *ch = getCharacteristic(serviceUUID, charUUID);
-    if (!ch)
-        return false;
-
-    ch->writeValue(&value, 1, true);
-    pushLog("[BLE] Write OK");
-    return true;
-}
-
 void BLEManager::notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool)
 {
     if (len == 0 || !ch)
@@ -186,7 +175,6 @@ void BLEManager::notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t 
 
     lastBleData.charUUID = ch->getUUID();
 
-    // deteksi otomatis heart rate UUID
     String charStr = lastBleData.charUUID.toString().c_str();
     charStr.toLowerCase();
     lastBleData.isHeartRate = (charStr.indexOf("2a37") != -1);
