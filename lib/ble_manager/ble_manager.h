@@ -3,17 +3,14 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
+#include "data.h"
 
 // Struktur data BLE mentah terakhir
-struct BleData
+struct BLEData
 {
-    uint8_t payload[64];
-    size_t length;
+    uint8_t data;
+    bool isNew;
     uint32_t timestamp;
-    bool ready;
-    BLEUUID serviceUUID;
-    BLEUUID charUUID;
-    bool isHeartRate;
 };
 
 class BLEManager
@@ -23,26 +20,30 @@ public:
     void begin(const char *deviceName = "EoRa-S3-BLE");
     bool connect();
     bool tryReconnect();
-    bool isConnected() const { return deviceConnected; }
+    bool isConnected() const { return (deviceConnected && pClient && pClient->isConnected()); }
 
-    bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
-
-    const BleData &getLastData() const { return lastBleData; }
-    bool popLog(String &out);
+    bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID, void(*callback)(BLERemoteCharacteristic*, uint8_t*, size_t, bool));
 
     // Sensor trigger commands
     bool triggerSpO2();
     bool triggerStress();
+    BLEData getLastSpO2();
+    BLEData getLastStress();
+    BLEData getLastHR();
 
     // Generic write function
     bool writeBytes(const BLEUUID &serviceUUID, const BLEUUID &charUUID, const uint8_t *data, size_t len);
 
+    static DeviceData BLEDataToSensorData(uint8_t device_id, Topic topic, BLEData data);
+
 private:
     const char *targetAddress;
+    static BLEManager *instance;
     uint32_t scanTime;
     bool deviceConnected;
     unsigned long lastReconnectAttempt;
     static constexpr unsigned long reconnectInterval = 5000;
+    BLEData HR, SpO2, Stress;
 
     BLEClient *pClient;
 
@@ -50,11 +51,7 @@ private:
     BLERemoteCharacteristic *getCharacteristic(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
     static void notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify);
-    static void pushLog(const char *msg);
-
-    static char logBuffer[128];
-    static bool hasLog;
-    static BleData lastBleData;
+    static void HRNotifyCallback(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify);
 
     class MyClientCallback : public BLEClientCallbacks
     {
