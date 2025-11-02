@@ -9,30 +9,37 @@
 // =============================================
 // Konfigurasi utama
 // =============================================
-#define DEVICE_MODE_TX 1
-const bool isTransmitter = DEVICE_MODE_TX;
+#ifdef DEVICE_MODE_CLIENT
+#elif defined(DEVICE_MODE_BASE)
+#endif
 
+#ifdef DEVICE_MODE_CLIENT
 // BLE target Aolon
+const int DEVICE_ID = 11;
 const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
 #define AOLON_SERVICE_UUID "0000feea-0000-1000-8000-00805f9b34fb"
 #define AOLON_WRITE_UUID "0000fee2-0000-1000-8000-00805f9b34fb"
 #define AOLON_NOTIFY_UUID "0000fee3-0000-1000-8000-00805f9b34fb"
-const int DEVICE_ID = 11;
+
+static const uint32_t BLE_RECONNECT_MS = 5000;
+static const uint32_t TRIGGER_INTERVAL_MS = 300000;          // 5 menit
+static const uint32_t INTERVAL_BETWEEN_SPO2_STRESS = 120000; // 2 menit
+bool streesTriggerPending = true;
+
+struct Timers
+{
+    uint32_t bleReconnect{0};
+    uint32_t sendTick{0};
+    uint32_t status{0};
+    uint32_t triggerTick{0};
+    uint32_t interval_spo_stress{0};
+} timers;
 
 // BLE & Sensor instance
 BLEManager ble(targetAddress, 6);
+#endif
 
-// LoRa pin mapping
-static const uint8_t LORA_NSS = 7;
-static const uint8_t LORA_SCK = 5;
-static const uint8_t LORA_MOSI = 6;
-static const uint8_t LORA_MISO = 3;
-static const uint8_t LORA_DIO1 = 33;
-static const uint8_t LORA_BUSY = 34;
-static const uint8_t LORA_RST = 8;
-
-LoRaHandler lora(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, LORA_SCK, LORA_MISO, LORA_MOSI);
-
+#ifdef DEVICE_MODE_BASE
 // MQTT setup
 const char *WIFI_SSID = "Warkop Kongkoow 2";
 const char *WIFI_PASS = "pesanduluyah2";
@@ -43,70 +50,12 @@ const char *MQTT_PASS = "mqttpass";
 const char *MQTT_TOPIC = "device/health";
 MqttManager mqtt(WIFI_SSID, WIFI_PASS, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS);
 
-static const uint32_t BLE_RECONNECT_MS = 5000;
-static const uint32_t SEND_INTERVAL_MS = 1000;
-static const uint32_t STATUS_INTERVAL_MS = 60000;
-static const uint32_t TRIGGER_INTERVAL_MS = 300000;          // 5 menit
-static const uint32_t INTERVAL_BETWEEN_SPO2_STRESS = 120000; // 2 menit
-
 // =============================================
 // Sinkronisasi waktu (NTP)
 // =============================================
 time_t bootEpoch = 0;
 unsigned long bootMillis = 0;
 bool ntpSynced = false;
-bool streesTriggerPending = true;
-
-// =============================================
-// Timer dan interval
-// =============================================
-struct Timers
-{
-    uint32_t bleReconnect{0};
-    uint32_t sendTick{0};
-    uint32_t status{0};
-    uint32_t triggerTick{0};
-    uint32_t interval_spo_stress{0};
-} timers;
-
-// =============================================
-// device data struct
-// data can convert to float or lattitude
-// =============================================
-struct device_data
-{
-    uint8_t device_id, topic_id;
-    uint64_t data, timestamp;
-};
-
-struct sensor_data
-{
-    uint8_t data;
-    bool isNew;
-    uint32_t timestamp;
-};
-
-// =============================================
-// encode data for lora message
-// =============================================
-void EncodeMessage(DeviceData *data, char *msg)
-{
-    if (sizeof(msg) < sizeof(data))
-        return;
-    memcpy(msg, data, sizeof(data));
-    return;
-}
-
-// =============================================
-// Parse data for lora message
-// =============================================
-void ParseMessage(DeviceData *data, char *msg)
-{
-    if (sizeof(msg) == sizeof(data))
-        return;
-    memcpy(data, msg, sizeof(msg));
-    return;
-}
 
 void setupTime()
 {
@@ -148,11 +97,70 @@ void setupTime()
     }
 }
 
+struct Timers
+{
+    uint32_t status{0};
+} timers;
+
 time_t getCurrentTime()
 {
     if (ntpSynced)
         return bootEpoch + ((millis() - bootMillis) / 1000);
     return millis() / 1000;
+}
+#endif
+
+// LoRa pin mapping
+static const uint8_t LORA_NSS = 7;
+static const uint8_t LORA_SCK = 5;
+static const uint8_t LORA_MOSI = 6;
+static const uint8_t LORA_MISO = 3;
+static const uint8_t LORA_DIO1 = 33;
+static const uint8_t LORA_BUSY = 34;
+static const uint8_t LORA_RST = 8;
+
+LoRaHandler lora(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY, LORA_SCK, LORA_MISO, LORA_MOSI);
+static const uint32_t STATUS_INTERVAL_MS = 60000;
+
+// =============================================
+// encode data for lora message
+// =============================================
+void EncodeMessage(DeviceData *data, char *msg)
+{
+    if (sizeof(*msg) < sizeof(*data))
+        return;
+    memcpy(msg, data, sizeof(*data));
+    return;
+}
+
+// =============================================
+// Parse data for lora message
+// =============================================
+void DecodeMessage(DeviceData *data, char *msg)
+{
+    if (sizeof(*msg) == sizeof(*data))
+        return;
+    memcpy(data, msg, sizeof(*msg));
+    return;
+}
+#ifdef DEVICE_MODE_BASE
+
+#endif
+std::string TopictoString(Topic topic)
+{
+    switch (topic)
+    {
+    case Topic::HEART_RATE:
+        return "heart_rate";
+    case Topic::SPO2:
+        return "heart_rate";
+    case Topic::STRESS:
+        return "stress";
+    case Topic::GPS:
+        return "GPS";
+    default:
+        return "unknown";
+    }
 }
 
 // =============================================
@@ -162,29 +170,27 @@ void setup()
 {
     Serial.begin(115200);
     delay(300);
-    setupTime();
+    esp_log_level_set("*", ESP_LOG_VERBOSE);
 
-    if (isTransmitter)
+#ifdef DEVICE_MODE_CLIENT
+    Serial.println(F("[Main] Mode: CLIENT"));
+    ble.begin("EoRa-S3");
+    if (!lora.begin(923.0))
     {
-        Serial.println(F("[Main] Mode: TRANSMITTER"));
-        ble.begin("EoRa-S3");
-
-        if (!lora.begin(923.0))
-        {
-            Serial.println(F("[Main] LoRa init failed"));
-            while (true)
-                delay(1000);
-        }
-        Serial.println(F("[Main] LoRa ready"));
+        Serial.println(F("[Main] LoRa init failed"));
+        while (true)
+            delay(1000);
     }
-    else
-    {
-        Serial.println(F("[Main] Mode: RECEIVER"));
-        lora.begin(923.0);
-        mqtt.begin();
-    }
+    Serial.println(F("[Main] LoRa ready"));
     // for auto start trigger
     timers.triggerTick = -300000;
+
+#elif defined(DEVICE_MODE_BASE)
+    setupTime();
+    Serial.println(F("[Main] Mode: BASE"));
+    lora.begin(923.0);
+    mqtt.begin();
+#endif
 }
 
 // =============================================
@@ -201,85 +207,105 @@ void loop()
         Serial.printf("[Status] Uptime:%lus | Heap:%u bytes\n", now / 1000, ESP.getFreeHeap());
     }
 
-    if (isTransmitter)
+#ifdef DEVICE_MODE_CLIENT
+    BLEData HR, SpO2, Stress;
+    // Reconnect BLE jika terputus
+    if (now - timers.bleReconnect >= BLE_RECONNECT_MS)
     {
-        BLEData HR, SpO2, Stress;
-        // Reconnect BLE jika terputus
-        if (now - timers.bleReconnect >= BLE_RECONNECT_MS)
+        timers.bleReconnect = now;
+        if (!ble.isConnected())
         {
-            timers.bleReconnect = now;
-            if (!ble.isConnected())
+            Serial.println("[BLE] Reconnecting...");
+            if (ble.tryReconnect())
             {
-                Serial.println("[BLE] Reconnecting...");
-                if (ble.tryReconnect())
-                {
-                    Serial.println("[BLE] Notify re-enabled after reconnect");
-                }
+                Serial.println("[BLE] Notify re-enabled after reconnect");
             }
         }
-
-        // Trigger SPO2 dan STRESS setiap 10 detik
-        if (ble.isConnected() && (now - timers.triggerTick >= TRIGGER_INTERVAL_MS))
-        {
-            timers.triggerTick = now;
-            Serial.println("[BLE] Triggering SPO2 sensors...");
-            ble.triggerSpO2();
-            delay(500);
-            ble.triggerSpO2();
-            timers.interval_spo_stress = now + INTERVAL_BETWEEN_SPO2_STRESS;
-            streesTriggerPending = false;
-        }
-        if (ble.isConnected() && !streesTriggerPending && (now>= timers.interval_spo_stress))
-        {
-            Serial.println("[BLE] Triggering Stress sensor");
-            ble.triggerStress();
-            delay(500);
-            ble.triggerStress();
-            streesTriggerPending = true;
-        }
-
-        HR = ble.getLastHR();
-        SpO2 = ble.getLastSpO2();
-        Stress = ble.getLastStress();
-
-        char msg[sizeof(device_data)];
-        DeviceData new_data;
-        if (HR.isNew)
-        {
-            Serial.printf("send hr data: %d \n", HR.data);
-            new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::HEART_RATE, HR);
-            EncodeMessage(&new_data, (char *)&msg);
-            lora.sendMessage(msg);
-        }
-        if (SpO2.isNew)
-        {
-            Serial.printf("send spo2 data: %d \n", SpO2.data);
-            new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::SPO2, SpO2);
-            EncodeMessage(&new_data, (char *)&msg);
-            lora.sendMessage(msg);
-        }
-        if (Stress.isNew)
-        {
-            Serial.printf("send Stress data: %d \n", Stress.data);
-            new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::STRESS, Stress);
-            EncodeMessage(&new_data, (char *)&msg);
-            lora.sendMessage(msg);
-        }
     }
-    else
+
+    // Trigger SPO2 dan STRESS setiap 10 detik
+    if (ble.isConnected() && (now - timers.triggerTick >= TRIGGER_INTERVAL_MS))
     {
-        // Mode RX → terima dan forward ke MQTT
-        mqtt.loop();
-        String msg;
-        int rssi;
-        float snr;
-        if (lora.receiveMessage(msg, rssi, snr))
-        {
-            Serial.printf("[RX] %s | RSSI:%d | SNR:%.1f\n", msg.c_str(), rssi, snr);
-            if (mqtt.isConnected())
-                mqtt.publish(MQTT_TOPIC, msg);
-        }
+        timers.triggerTick = now;
+        Serial.println("[BLE] Triggering SPO2 sensors...");
+        ble.triggerSpO2();
+        delay(500);
+        ble.triggerSpO2();
+        timers.interval_spo_stress = now + INTERVAL_BETWEEN_SPO2_STRESS;
+        streesTriggerPending = false;
+    }
+    if (ble.isConnected() && !streesTriggerPending && (now >= timers.interval_spo_stress))
+    {
+        Serial.println("[BLE] Triggering Stress sensor");
+        ble.triggerStress();
+        delay(500);
+        ble.triggerStress();
+        streesTriggerPending = true;
     }
 
+    HR = ble.getLastHR();
+    SpO2 = ble.getLastSpO2();
+    Stress = ble.getLastStress();
+
+    char msg[sizeof(DeviceData)];
+    DeviceData new_data;
+    if (HR.isNew)
+    {
+        Serial.printf("send hr data: %d \n", HR.data);
+        new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::HEART_RATE, HR);
+        EncodeMessage(&new_data, (char *)&msg);
+        lora.sendMessage(msg);
+    }
+    if (SpO2.isNew)
+    {
+        Serial.printf("send spo2 data: %d \n", SpO2.data);
+        new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::SPO2, SpO2);
+        EncodeMessage(&new_data, (char *)&msg);
+        lora.sendMessage(msg);
+    }
+    if (Stress.isNew)
+    {
+        Serial.printf("send Stress data: %d \n", Stress.data);
+        new_data = ble.BLEDataToSensorData(DEVICE_ID, Topic::STRESS, Stress);
+        EncodeMessage(&new_data, (char *)&msg);
+        lora.sendMessage(msg);
+    }
+#elif defined(DEVICE_MODE_BASE)
+    // Mode RX → terima dan forward ke MQTT
+    mqtt.loop();
+    String msg;
+    DeviceData device_data;
+    int rssi;
+    float snr;
+    struct tm timeinfo;
+    char timeStringBuff[64];
+    String mqtt_payload;
+    std::string full_topic;
+    if (!getLocalTime(&timeinfo))
+    {
+        Serial.println("Failed to obtain time");
+        return;
+    }
+    strftime(timeStringBuff, sizeof(timeStringBuff), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    if (lora.receiveMessage(msg, rssi, snr))
+    {
+        Serial.printf("[RX] %s | RSSI:%d | SNR:%.1f\n", msg.c_str(), rssi, snr);
+        EncodeMessage(&device_data, (char *)msg.c_str());
+        if (device_data.topic != Topic::GPS)
+        {
+            Serial.printf("[LORA] get data from device: %d on Topic : %s and value: %d\n at %s\n", device_data.device_id, TopictoString(device_data.topic).c_str(), device_data.sensor.data, timeStringBuff);
+            mqtt_payload = String(device_data.sensor.data);
+            full_topic = std::to_string(device_data.device_id) + "/" + TopictoString(device_data.topic);
+        }
+        else
+        {
+            Serial.printf("[LORA] get data from device: %d on Topic : %s and location: (%.6f, %.6f) at %s\n", device_data.device_id, TopictoString(device_data.topic).c_str(), device_data.sensor.location.lattitude, device_data.sensor.location.longitude, timeStringBuff);
+            mqtt_payload = String("{\"lattitude\":") + String(device_data.sensor.location.lattitude, 6) + String(", \"longitude\":") + String(device_data.sensor.location.longitude, 6) + String("}");
+            full_topic = std::to_string(device_data.device_id) + "/" + TopictoString(device_data.topic);
+        }
+        if (mqtt.isConnected())
+            mqtt.publish((char *)full_topic.c_str(), mqtt_payload);
+    }
+#endif
     delay(50);
 }

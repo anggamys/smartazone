@@ -23,6 +23,5 @@ struct DeviceData
     uint8_t device_id;
     Topic topic;
     SensorData sensor;
-    uint32_t timestamp;
 };
 #endif

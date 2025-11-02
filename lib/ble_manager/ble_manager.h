@@ -10,7 +10,6 @@ struct BLEData
 {
     uint8_t data;
     bool isNew;
-    uint32_t timestamp;
 };
 
 class BLEManager
@@ -22,7 +21,7 @@ public:
     bool tryReconnect();
     bool isConnected() const { return (deviceConnected && pClient && pClient->isConnected()); }
 
-    bool enableNotify(const BLEUUID &serviceUUID, const BLEUUID &charUUID, void(*callback)(BLERemoteCharacteristic*, uint8_t*, size_t, bool));
+    bool enableNotify(BLERemoteService *service, BLERemoteCharacteristic *characteristic, void(*callback)(BLERemoteCharacteristic*, uint8_t*, size_t, bool));
 
     // Sensor trigger commands
     bool triggerSpO2();
@@ -30,6 +29,8 @@ public:
     BLEData getLastSpO2();
     BLEData getLastStress();
     BLEData getLastHR();
+    bool setupServicesAndCharacteristics();
+    bool checkServicesAndCharacteristics();
 
     // Generic write function
     bool writeBytes(const BLEUUID &serviceUUID, const BLEUUID &charUUID, const uint8_t *data, size_t len);
@@ -46,9 +47,17 @@ private:
     BLEData HR, SpO2, Stress;
 
     BLEClient *pClient;
+    // Remote services for heart rate and generic
+    BLERemoteService *pHRRemoteService;
+    BLERemoteService *pGenericService;
+
+    
+    // Remote characteristics for heart rate and generic
+    BLERemoteCharacteristic *pHRNotifyCharacteristic;
+    BLERemoteCharacteristic *pGenericWriteCharacteristic;
+    BLERemoteCharacteristic *pGenericNotifyCharacteristic;
 
     BLEAddress scanTarget();
-    BLERemoteCharacteristic *getCharacteristic(const BLEUUID &serviceUUID, const BLEUUID &charUUID);
 
     static void notifyThunk(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify);
     static void HRNotifyCallback(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify);
