@@ -334,9 +334,9 @@ BLEData BLEManager::getLastHR()
 
 DeviceData BLEManager::BLEDataToSensorData(uint8_t device_id, Topic topic, BLEData data)
 {
-    DeviceData dev_data;
+    DeviceData dev_data={};
     dev_data.device_id = device_id;
     dev_data.topic = topic;
-    dev_data.sensor.data = data.data;
+    dev_data.sensor.value = data.data;
     return dev_data;
 }

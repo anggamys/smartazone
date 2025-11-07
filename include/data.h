@@ -7,7 +7,7 @@ struct Location
 };
 union SensorData
 {
-    uint64_t data;
+    uint8_t value;
     Location location;
 };
 enum class Topic : uint8_t
@@ -20,8 +20,15 @@ enum class Topic : uint8_t
 
 struct DeviceData
 {
+    SensorData sensor;
     uint8_t device_id;
     Topic topic;
-    SensorData sensor;
+};
+
+struct GPSData
+{
+    float lattitude;
+    float longitude;
+    bool isNew;
 };
 #endif
