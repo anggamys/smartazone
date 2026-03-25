@@ -19,6 +19,7 @@
 // BLE target Aolon
 const int DEVICE_ID = 11;
 const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
+#define SOS_PIN GPIO_NUM_42 
 #define AOLON_SERVICE_UUID "0000feea-0000-1000-8000-00805f9b34fb"
 #define AOLON_WRITE_UUID "0000fee2-0000-1000-8000-00805f9b34fb"
 #define AOLON_NOTIFY_UUID "0000fee3-0000-1000-8000-00805f9b34fb"
@@ -27,10 +28,14 @@ const char targetAddress[] PROGMEM = "f8:fd:e8:84:37:89";
 HardwareSerial GPSSerial(2);
 TinyGPSPlus gps;
 
+
 static const uint32_t BLE_RECONNECT_MS = 5000;
 static const uint32_t TRIGGER_INTERVAL_MS = 300000;          // 5 menit
 static const uint32_t INTERVAL_BETWEEN_SPO2_STRESS = 120000; // 2 menit
 static const uint32_t GPS_INTERVAL_MS = 60000;               // 1 menit
+#define BUTTON_LONG_TIME 2000
+#define BUTTON_DEBUNCE_TIME 50
+bool is_pressed = false;
 bool streesTriggerPending = true;
 GPSData gpsData;
 
@@ -42,11 +47,22 @@ struct Timers
     uint32_t triggerTick{0};
     uint32_t interval_spo_stress{0};
     uint32_t gps_tick{0};
+    uint32_t debounce_tick{0};
+    uint32_t hold_tick{UINT32_MAX};
 } timers;
 
 // BLE & Sensor instance
 BLEManager ble(targetAddress, 6);
 
+void IRAM_ATTR handle_button_callback(){
+    uint32_t now = millis();
+    if ((now - timers.debounce_tick) < BUTTON_DEBUNCE_TIME){
+        // is_pressed = false;
+        return;
+    }
+    timers.debounce_tick = now;
+    is_pressed = !digitalRead(SOS_PIN);
+}
 // =============================================
 // GPS Task
 // =============================================
@@ -80,8 +96,8 @@ void gps_task(void *pvParameters)
         if (now - timers.gps_tick < GPS_INTERVAL_MS)
             continue;
         timers.gps_tick = now;
-        data->lattitude = -7.33468736879843;
-        data->longitude = 112.78816294422748;
+        data->lattitude = -7.334967968864027;
+        data->longitude = 112.78784320020455;
         data->isNew = true;
         Serial.printf("[GPS] New location: %.6f, %.6f\n", data->lattitude, data->longitude);
         vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -100,6 +116,8 @@ std::string TopictoString(Topic topic)
         return "stress";
     case Topic::GPS:
         return "GPS";
+    case Topic::SOS:
+        return "SOS";
     default:
         return "unknown";
     }
@@ -107,14 +125,15 @@ std::string TopictoString(Topic topic)
 
 #ifdef DEVICE_MODE_BASE
 // MQTT setup
-const char *WIFI_SSID = "teknik";
-const char *WIFI_PASS = "sipalingteknik";
+const char *WIFI_SSID = "vivoaswin";
+const char *WIFI_PASS = "satuduatigaempatlima";
 const char *MQTT_SERVER = "192.168.1.44";
 const uint16_t MQTT_PORT = 1883;
 const char *MQTT_USER = "mqtt";
 const char *MQTT_PASS = "mqttpass";
 const char *MQTT_TOPIC = "device/health";
-const char *API_URL = "http://10.107.116.40:8000/api/update-log";
+const char *API_URL = "http://smartazone.my.id/api/update-log";
+const char *SOS_API_URL = "http://smartazone.my.id/api/sos-trigger";
 MqttManager mqtt(WIFI_SSID, WIFI_PASS, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASS);
 AsyncHTTPRequest request;
 
@@ -166,7 +185,7 @@ void PostDeviceData(const DeviceData &data){
     static bool requestOpenResult = false;
     StaticJsonDocument<256> doc;
     doc["device_id"] = data.device_id;
-    if (data.topic == Topic::GPS)
+    if (data.topic == Topic::GPS || data.topic == Topic::SOS)
     {
         doc["lattitude"] = data.sensor.location.lattitude;
         doc["longitude"] = data.sensor.location.longitude;
@@ -184,9 +203,15 @@ void PostDeviceData(const DeviceData &data){
         doc["stress_level"] = data.sensor.value;
     }
     String json;
+    const char *URL; 
+    if (data.topic == Topic::SOS )
+       URL =  SOS_API_URL;
+    else
+        URL =  API_URL;
     serializeJson(doc, json);
+    Serial.println("[HTTP] Preparing to post to " + String(URL));
     if (request.readyState() == readyStateUnsent || request.readyState() == readyStateDone){
-        requestOpenResult =  request.open("POST", API_URL);
+        requestOpenResult =  request.open("POST", URL);
         request.setReqHeader("Content-Type", "application/json");
         if (!requestOpenResult){
             Serial.println("[HTTP] Failed to open request");
@@ -279,6 +304,10 @@ void setup()
         1,                /* priority of the task */
         NULL,             /* Task handle to keep track of created task */
         1);               /* pin task to core 1 */
+    pinMode(GPIO_NUM_47,OUTPUT);
+    digitalWrite(GPIO_NUM_47,LOW);
+    pinMode(SOS_PIN,INPUT_PULLUP);
+    attachInterrupt(SOS_PIN,handle_button_callback,CHANGE);
 
 #elif defined(DEVICE_MODE_BASE)
     setupTime();
@@ -306,6 +335,23 @@ void loop()
 
 #ifdef DEVICE_MODE_CLIENT
     BLEData HR, SpO2, Stress;
+    DeviceData new_data;
+    if (is_pressed &&( timers.hold_tick == UINT32_MAX))
+        timers.hold_tick = now;
+    else if(!is_pressed)
+        timers.hold_tick = UINT32_MAX;
+    if (is_pressed && now - timers.hold_tick >= BUTTON_LONG_TIME){
+        timers.hold_tick = UINT32_MAX;
+        is_pressed = false;
+        DeviceData data ={0};
+        data.device_id = DEVICE_ID;
+        data.sensor.location.lattitude = gpsData.lattitude;
+        data.sensor.location.longitude = gpsData.longitude;
+        data.topic= Topic::SOS;
+        new_data = data;
+        lora.transmit((uint8_t*)&new_data, sizeof(DeviceData));
+        Serial.printf("send sos trigger data\n");
+    }
     // Reconnect BLE jika terputus
     if (now - timers.bleReconnect >= BLE_RECONNECT_MS)
     {
@@ -343,7 +389,6 @@ void loop()
     HR = ble.getLastHR();
     SpO2 = ble.getLastSpO2();
     Stress = ble.getLastStress();
-    DeviceData new_data;
     if (HR.isNew)
     {
         Serial.printf("send hr data: %d \n", HR.data);
@@ -394,7 +439,7 @@ void loop()
         if (!packet.isNew)
             return;
         device_data = packet.device_data;
-        if (device_data.topic != Topic::GPS)
+        if (device_data.topic != Topic::GPS && device_data.topic != Topic::SOS)
         {
             std::string topic_str = TopictoString(device_data.topic);
             Serial.printf("[LORA] get data from device: %d on Topic : %s and value: %d\n at %s\n", device_data.device_id, topic_str.c_str(), device_data.sensor.value, timeStringBuff);

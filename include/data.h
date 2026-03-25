@@ -15,7 +15,8 @@ enum class Topic : uint8_t
     HEART_RATE=1,
     SPO2=2,
     STRESS=3,
-    GPS=4
+    GPS=4,
+    SOS=5
 };
 
 struct DeviceData
